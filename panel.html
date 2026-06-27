@@ -172,6 +172,11 @@
         </div>
         <div class="hint">批量开启/关闭下方「各群开关」表里的所有分群。</div>
       </div>
+      <div class="row">
+        <label>拒绝通知</label>
+        <div class="switch" id="sw-reject" onclick="toggleReject()"><span class="knob"></span><span id="sw-reject-text">关闭</span></div>
+        <div class="hint">开启后, 审核「拒绝」会通知提交群该关键词被驳回。</div>
+      </div>
       <div class="row" style="display:block">
         <label style="display:block;margin-bottom:8px">超级管理员 openid</label>
         <div style="display:flex;gap:8px">
@@ -495,6 +500,8 @@ function renderCfg(){
   $('sw-global').classList.toggle('on', on); $('sw-global-text').textContent= on?'开启':'关闭';
   const fb=!!CONFIG.forbid_group;
   $('sw-forbid').classList.toggle('on', fb); $('sw-forbid-text').textContent= fb?'开启':'关闭';
+  const rj=CONFIG.notify_reject!==false;
+  $('sw-reject').classList.toggle('on', rj); $('sw-reject-text').textContent= rj?'开启':'关闭';
   const sl=$('sa-list'); sl.innerHTML='';
   (CONFIG.super_admins||[]).forEach((a,i)=>{
     const t=document.createElement('span'); t.className='tag';
@@ -512,6 +519,7 @@ function renderCfg(){
 }
 
 function toggleGlobal(){ CONFIG.global_enabled=!CONFIG.global_enabled; renderCfg(); }
+function toggleReject(){ CONFIG.notify_reject=(CONFIG.notify_reject===false); renderCfg(); }
 function toggleGroup(g){ CONFIG.group_enabled[g]=!CONFIG.group_enabled[g]; renderCfg(); }
 async function toggleForbid(){
   const next=!CONFIG.forbid_group;
@@ -533,7 +541,7 @@ $('sa-input')&&($('sa-input').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefau
 function rmSuperAdmin(i){ CONFIG.super_admins.splice(i,1); renderCfg(); }
 
 async function saveConfig(){
-  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
+  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, notify_reject:CONFIG.notify_reject, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
   if(r.success){ toast('已保存'); loadState(); } else toast('保存失败');
 }
 
