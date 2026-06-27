@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>关键词自动回复</title>
+<style>
+  :root{
+    --bg:#f5f6fa; --card:#fff; --card2:#f0f2f7; --fg:#1f2330;
+    --mut:#8a90a2; --bd:#e3e6ef; --accent:#5b6cff; --ok:#16a34a; --err:#dc2626; --warn:#f59e0b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;
+       background:var(--bg);color:var(--fg);padding:18px;font-size:14px}
+  h2{font-size:16px;margin-bottom:4px}
+  .sub{color:var(--mut);font-size:12px;margin-bottom:14px}
+  /* tab */
+  .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+  .tab{padding:7px 14px;border-radius:8px;background:var(--card);border:1px solid var(--bd);
+       cursor:pointer;color:var(--mut);user-select:none}
+  .tab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  /* card */
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px;margin-bottom:14px}
+  .row{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  label{font-weight:600;min-width:92px}
+  input[type=text],input[type=number],textarea,select{
+    background:var(--card2);border:1px solid var(--bd);border-radius:8px;padding:9px 11px;
+    color:var(--fg);font-size:14px;font-family:inherit;flex:1;min-width:160px;outline:none}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+  textarea{width:100%;min-height:120px;resize:vertical;line-height:1.6;font-family:ui-monospace,Menlo,Consolas,monospace}
+  select{max-width:200px}
+  .hint{color:var(--mut);font-size:12px;margin-top:4px;flex-basis:100%}
+  .hint code{background:var(--card2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12px}
+  /* button */
+  button{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 16px;
+         cursor:pointer;font-size:14px;transition:.15s}
+  button.ghost{background:var(--card2);color:var(--fg);border:1px solid var(--bd)}
+  button.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  button.danger{background:var(--err)}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  /* switch */
+  .switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+  .switch .knob{width:42px;height:24px;border-radius:12px;background:var(--bd);position:relative;transition:.2s}
+  .switch .knob::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;
+       background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+  .switch.on .knob{background:var(--accent)}
+  .switch.on .knob::after{left:20px}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px;border-bottom:1px solid var(--bd);vertical-align:middle}
+  th{color:var(--mut);font-weight:600;font-size:12px}
+  tr:hover td{background:rgba(91,108,255,.03)}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
+  /* pill */
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;white-space:nowrap}
+  .pill.exact{background:rgba(22,163,74,.12);color:var(--ok)}
+  .pill.fuzzy{background:rgba(245,158,11,.12);color:var(--warn)}
+  .pill.regex{background:rgba(220,38,38,.12);color:var(--err)}
+  .pill.scope{background:var(--card2);color:var(--mut)}
+  .pill.md{background:rgba(91,108,255,.12);color:var(--accent)}
+  .pill.md.off{opacity:.4}
+  .prio{font-family:ui-monospace,monospace;color:var(--warn);font-weight:600}
+  /* empty */
+  .empty{color:var(--mut);text-align:center;padding:40px}
+  .empty .big{font-size:36px;margin-bottom:8px}
+  /* icon button */
+  .icon-btn{width:28px;height:28px;border:1px solid var(--bd);background:var(--card2);color:var(--mut);
+    border-radius:6px;cursor:pointer;font-size:12px;display:inline-flex;align-items:center;justify-content:center;transition:.15s}
+  .icon-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .icon-btn.del:hover{border-color:var(--err);color:var(--err)}
+  .icon-btn:disabled{opacity:.3;cursor:not-allowed}
+  .row-actions{display:flex;gap:4px;flex-wrap:wrap}
+  /* toast */
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:#1f2330;color:#fff;padding:10px 18px;border-radius:8px;opacity:0;transition:.25s;pointer-events:none;z-index:200}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .hidden{display:none}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+  .stat{color:var(--mut);font-size:12px}
+  .stat b{color:var(--accent)}
+  /* modal */
+  .modal-mask{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;
+    align-items:center;justify-content:center;padding:20px}
+  .modal-mask.show{display:flex}
+  .modal{background:var(--card);border:1px solid var(--bd);border-radius:12px;width:100%;max-width:560px;
+    max-height:90vh;overflow-y:auto;padding:24px}
+  .modal h3{font-size:16px;color:var(--accent);margin-bottom:16px}
+  .modal .field{margin-bottom:14px}
+  .modal .field label{display:block;margin-bottom:6px;min-width:auto}
+  .modal .field .hint{margin-top:4px}
+  .modal .field-row{display:flex;gap:12px}
+  .modal .field-row .field{flex:1}
+  .modal .check-row{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px}
+  .modal .check-row label{display:flex;align-items:center;gap:6px;font-weight:normal;min-width:auto;cursor:pointer}
+  .modal-footer{display:flex;gap:10px;justify-content:flex-end;margin-top:8px}
+  /* test result */
+  .test-result{background:var(--card2);border:1px solid var(--bd);border-radius:8px;padding:14px;margin-top:14px;font-size:13px;line-height:1.7}
+  .test-result .none{color:var(--mut)}
+  .test-result .rendered{background:var(--bg);border:1px dashed var(--bd);border-radius:6px;padding:10px;margin-top:8px;
+    white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Consolas,monospace}
+  /* var reference */
+  .var-ref{background:var(--card2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-top:12px;font-size:12px;line-height:1.8}
+  .var-ref code{background:var(--card);border:1px solid var(--bd);border-radius:4px;padding:1px 6px;color:var(--accent)}
+</style>
+</head>
+<body>
+  <h2>关键词自动回复</h2>
+  <div class="sub">配置关键词规则, 机器人收到匹配消息后自动回复 · 完全/模糊/正则匹配 · 变量替换 · Markdown</div>
+
+  <div class="tabs">
+    <div class="tab on" data-tab="rules">规则列表</div>
+    <div class="tab" data-tab="cfg">全局设置</div>
+    <div class="tab" data-tab="test">测试匹配</div>
+  </div>
+
+  <!-- ========== 规则列表 ========== -->
+  <div id="tab-rules">
+    <div class="card">
+      <div class="toolbar">
+        <button onclick="openEditor()">+ 添加规则</button>
+        <button class="ghost" onclick="loadState()">↻ 刷新</button>
+        <span id="rules-stat" class="stat"></span>
+      </div>
+      <table>
+        <thead><tr>
+          <th style="width:60px">启用</th>
+          <th>名称 / 关键词</th>
+          <th style="width:80px">匹配</th>
+          <th style="width:60px">优先级</th>
+          <th style="width:70px">作用域</th>
+          <th style="width:50px">MD</th>
+          <th style="width:150px">操作</th>
+        </tr></thead>
+        <tbody id="rules-body"></tbody>
+      </table>
+      <div id="rules-empty" class="empty hidden">
+        <div class="big">📭</div>
+        <div>还没有规则, 点击「添加规则」开始配置</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 全局设置 ========== -->
+  <div id="tab-cfg" class="hidden">
+    <div class="card">
+      <div class="row">
+        <label>总开关</label>
+        <div class="switch" id="sw-global" onclick="toggleGlobal()"><span class="knob"></span><span id="sw-global-text">关闭</span></div>
+        <div class="hint">关闭后所有规则都不生效。</div>
+      </div>
+      <div class="row">
+        <label>全局 Markdown</label>
+        <div class="switch" id="sw-md" onclick="toggleMd()"><span class="knob"></span><span id="sw-md-text">关闭</span></div>
+        <div class="hint">规则设为「跟随全局」时生效; 规则级 true/false 会覆盖此设置。</div>
+      </div>
+      <div class="row">
+        <label>默认匹配模式</label>
+        <select id="cfg-default-mode">
+          <option value="exact">完全匹配</option>
+          <option value="fuzzy">模糊匹配</option>
+          <option value="regex">正则匹配</option>
+        </select>
+        <div class="hint">面板新建规则时的默认匹配模式。</div>
+      </div>
+      <div class="toolbar">
+        <button onclick="saveConfig()">保存设置</button>
+        <span id="cfg-stat" class="stat"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 测试匹配 ========== -->
+  <div id="tab-test" class="hidden">
+    <div class="card">
+      <div class="row" style="display:block">
+        <label style="display:block;margin-bottom:8px">模拟消息内容</label>
+        <textarea id="test-content" placeholder="输入一段消息内容, 查看会命中哪条规则" style="min-height:80px"></textarea>
+      </div>
+      <div class="row">
+        <label>模拟场景</label>
+        <label style="font-weight:normal;min-width:auto;cursor:pointer"><input type="radio" name="test-scope" value="group" checked> 群聊</label>
+        <label style="font-weight:normal;min-width:auto;cursor:pointer"><input type="radio" name="test-scope" value="direct"> 私聊</label>
+      </div>
+      <div class="toolbar">
+        <button onclick="runTest()">测试匹配</button>
+        <button class="ghost" onclick="loadState()">↻ 重新加载规则</button>
+      </div>
+      <div id="test-result" class="test-result hidden"></div>
+      <div class="var-ref">
+        <b>可用变量:</b><br>
+        <code>{user_id}</code> <code>{username}</code> <code>{group_id}</code> <code>{chat_type}</code>
+        <code>{content}</code> <code>{raw_content}</code> <code>{message_id}</code><br>
+        <code>{time}</code> <code>{date}</code> <code>{datetime}</code>
+        <code>{match_0}</code>~<code>{match_9}</code> (正则分组)
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 规则编辑弹窗 ========== -->
+  <div class="modal-mask" id="editor-mask">
+    <div class="modal">
+      <h3 id="editor-title">添加规则</h3>
+      <input type="hidden" id="f-id">
+      <div class="field">
+        <label>规则名称</label>
+        <input type="text" id="f-name" placeholder="如: 欢迎语" maxlength="60">
+      </div>
+      <div class="field">
+        <label>关键词 / 正则表达式</label>
+        <input type="text" id="f-keyword" placeholder="如: 你好  (正则模式请填正则)">
+        <div class="hint" id="kw-hint"></div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>匹配模式</label>
+          <select id="f-match-mode">
+            <option value="exact">完全匹配 (消息 == 关键词)</option>
+            <option value="fuzzy" selected>模糊匹配 (消息包含关键词)</option>
+            <option value="regex">正则匹配 (re.search)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>优先级 (越大越先)</label>
+          <input type="number" id="f-priority" value="0">
+        </div>
+      </div>
+      <div class="field">
+        <label>回复内容 (支持变量替换)</label>
+        <textarea id="f-reply" placeholder="你好, {username}!&#10;可用变量见「测试匹配」页"></textarea>
+        <div class="hint">变量用 <code>{变量名}</code> 嵌入, 正则分组用 <code>{match_1}</code>~<code>{match_9}</code></div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>作用域</label>
+          <select id="f-scope">
+            <option value="all">全部 (群+私聊)</option>
+            <option value="group">仅群聊</option>
+            <option value="direct">仅私聊</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Markdown</label>
+          <select id="f-use-markdown">
+            <option value="inherit">跟随全局</option>
+            <option value="on">强制 Markdown</option>
+            <option value="off">强制纯文本</option>
+          </select>
+        </div>
+      </div>
+      <div class="check-row">
+        <label><input type="checkbox" id="f-enabled" checked> 启用此规则</label>
+        <label><input type="checkbox" id="f-case"> 区分大小写</label>
+      </div>
+      <div class="modal-footer">
+        <button class="ghost" onclick="closeEditor()">取消</button>
+        <button onclick="saveRule()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+// ===== token + API 基址 (照搬入群欢迎插件模式) =====
+const qs = new URLSearchParams(location.search);
+const TOKEN = qs.get('token') || '';
+const _bm = location.pathname.match(/^(.*)\/api\/web-pages\//);
+const API = (_bm ? _bm[1] : '') + '/api/ext/keyword_reply';
+
+let RULES = [];
+let CONFIG = { global_enabled:true, markdown_enabled:false, default_match_mode:'fuzzy' };
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1800); }
+function hdr(){ return {'Content-Type':'application/json','Authorization':'Bearer '+TOKEN}; }
+async function api(path, method, body){
+  const sep = path.includes('?') ? '&' : '?';
+  const r = await fetch(API+path+(method==='GET'?(sep+'token='+TOKEN):''), {
+    method: method||'GET', headers: hdr(), body: body?JSON.stringify(body):undefined });
+  return r.json();
+}
+
+// 同步后台主题色 (iframe 嵌入)
+function applyTheme(){
+  let ps=null;
+  try{ if(window.parent && window.parent!==window) ps=getComputedStyle(window.parent.document.documentElement); }catch(e){ ps=null; }
+  if(!ps) return;
+  const g=n=>ps.getPropertyValue(n).trim();
+  const map={'--bg':['--bg','--background'],'--card':['--bg2','--bg-float','--card'],
+    '--card2':['--bg3','--bg2'],'--fg':['--text','--fg'],
+    '--mut':['--text3','--text2','--muted'],'--bd':['--border','--bd'],
+    '--accent':['--primary','--accent']};
+  const root=document.documentElement.style;
+  for(const k in map){ for(const v of map[k]){ const val=g(v); if(val){ root.setProperty(k,val); break; } } }
+}
+
+// ===== tab 切换 =====
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('on', e.dataset.tab===t));
+  $('tab-rules').classList.toggle('hidden', t!=='rules');
+  $('tab-cfg').classList.toggle('hidden', t!=='cfg');
+  $('tab-test').classList.toggle('hidden', t!=='test');
+  if(t==='cfg') renderCfg();
+}
+document.querySelectorAll('.tab').forEach(e=>e.onclick=()=>switchTab(e.dataset.tab));
+
+// ===== 加载状态 =====
+async function loadState(){
+  const j = await api('/state','GET');
+  if(!j.success){ toast('加载失败'); return; }
+  RULES = j.rules || [];
+  CONFIG = j.config || CONFIG;
+  renderRules();
+  if(!$('tab-cfg').classList.contains('hidden')) renderCfg();
+}
+
+// ===== 规则列表渲染 =====
+function sortedRules(){
+  // 优先级降序, 创建时间升序 (与后端 _find_match 一致)
+  return RULES.slice().sort((a,b)=>{
+    const dp = (b.priority||0) - (a.priority||0);
+    if(dp!==0) return dp;
+    return (a.created_at||'').localeCompare(b.created_at||'');
+  });
+}
+function modePill(m){
+  const label = {exact:'完全',fuzzy:'模糊',regex:'正则'}[m] || m;
+  return '<span class="pill '+m+'">'+label+'</span>';
+}
+function scopePill(s){
+  const label = {all:'全部',group:'仅群',direct:'仅私'}[s] || s;
+  return '<span class="pill scope">'+label+'</span>';
+}
+function mdPill(r){
+  if(r.use_markdown===true) return '<span class="pill md" title="强制Markdown">MD</span>';
+  if(r.use_markdown===false) return '<span class="pill md off" title="强制纯文本">MD</span>';
+  return '<span class="pill md off" title="跟随全局">MD</span>';
+}
+function renderRules(){
+  const list = sortedRules();
+  $('rules-stat').innerHTML = '共 <b>'+RULES.length+'</b> 条 · <b>'+RULES.filter(r=>r.enabled).length+'</b> 条启用';
+  if(!list.length){
+    $('rules-body').innerHTML='';
+    $('rules-empty').classList.remove('hidden');
+    return;
+  }
+  $('rules-empty').classList.add('hidden');
+  $('rules-body').innerHTML = list.map((r,i)=>`<tr>
+    <td><div class="switch ${r.enabled?'on':''}" onclick="toggleRule('${r.id}', ${!r.enabled})"><span class="knob"></span></div></td>
+    <td><b>${esc(r.name)}</b><div class="mono" style="margin-top:2px;color:var(--accent)">${esc(r.keyword)}</div></td>
+    <td>${modePill(r.match_mode)}</td>
+    <td><span class="prio">${r.priority||0}</span></td>
+    <td>${scopePill(r.scope)}</td>
+    <td>${mdPill(r)}</td>
+    <td><div class="row-actions">
+      <button class="icon-btn" title="上移" ${i===0?'disabled':''} onclick="moveRule(${i},-1)">▲</button>
+      <button class="icon-btn" title="下移" ${i===list.length-1?'disabled':''} onclick="moveRule(${i},1)">▼</button>
+      <button class="icon-btn" title="编辑" onclick='openEditor(${JSON.stringify(r).replace(/'/g,"&#39;")})'>✎</button>
+      <button class="icon-btn del" title="删除" onclick="delRule('${r.id}','${esc(r.name)}')">✕</button>
+    </div></td>
+  </tr>`).join('');
+}
+
+// ===== 规则操作 =====
+async function toggleRule(id, enabled){
+  const j = await api('/toggle','POST',{id, enabled});
+  if(j.success){
+    const idx = RULES.findIndex(x=>x.id===id);
+    if(idx>=0) RULES[idx] = j.rule;
+    renderRules();
+  } else toast(j.message||'操作失败');
+}
+
+async function delRule(id, name){
+  if(!confirm('确定删除规则「'+name+'」?')) return;
+  const j = await api('/delete','POST',{id});
+  if(j.success){ RULES = RULES.filter(x=>x.id!==id); renderRules(); toast('已删除'); }
+  else toast(j.message||'删除失败');
+}
+
+async function moveRule(index, dir){
+  const list = sortedRules();
+  const j = index + dir;
+  if(j<0 || j>=list.length) return;
+  [list[index], list[j]] = [list[j], list[index]];
+  const ids = list.map(r=>r.id);
+  const r = await api('/reorder','POST',{ids});
+  if(r.success){ RULES = r.rules || RULES; renderRules(); }
+}
+
+// ===== 编辑器 =====
+function openEditor(rule){
+  const r = rule || {};
+  $('editor-title').textContent = r.id ? '编辑规则' : '添加规则';
+  $('f-id').value = r.id || '';
+  $('f-name').value = r.name || '';
+  $('f-keyword').value = r.keyword || '';
+  $('f-match-mode').value = r.match_mode || CONFIG.default_match_mode || 'fuzzy';
+  $('f-priority').value = r.priority!=null ? r.priority : 0;
+  $('f-reply').value = r.reply || '';
+  $('f-scope').value = r.scope || 'all';
+  const um = r.use_markdown;
+  $('f-use-markdown').value = um===true?'on':(um===false?'off':'inherit');
+  $('f-enabled').checked = r.enabled !== false;
+  $('f-case').checked = !!r.case_sensitive;
+  updateKwHint();
+  $('editor-mask').classList.add('show');
+}
+function closeEditor(){ $('editor-mask').classList.remove('show'); }
+
+$('f-match-mode').onchange = updateKwHint;
+function updateKwHint(){
+  const m = $('f-match-mode').value;
+  const h = $('kw-hint');
+  if(m==='regex') h.innerHTML = '正则模式: re.search 匹配, 分组可用 <code>{match_1}</code> 引用';
+  else if(m==='exact') h.innerHTML = '完全匹配: 消息全文须与关键词完全一致';
+  else h.innerHTML = '模糊匹配: 消息中包含关键词即命中';
+}
+
+async function saveRule(){
+  const umVal = $('f-use-markdown').value;
+  const payload = {
+    name: $('f-name').value.trim(),
+    keyword: $('f-keyword').value,
+    match_mode: $('f-match-mode').value,
+    priority: parseInt($('f-priority').value,10) || 0,
+    reply: $('f-reply').value,
+    scope: $('f-scope').value,
+    use_markdown: umVal==='on'?true:(umVal==='off'?false:null),
+    enabled: $('f-enabled').checked,
+    case_sensitive: $('f-case').checked,
+  };
+  const id = $('f-id').value;
+  if(id) payload.id = id;
+  if(!payload.keyword.trim()){ toast('关键词不能为空'); return; }
+  const j = await api('/rule','POST',payload);
+  if(j.success){
+    toast(id?'已更新':'已添加');
+    closeEditor();
+    const idx = RULES.findIndex(x=>x.id===j.rule.id);
+    if(idx>=0) RULES[idx] = j.rule; else RULES.push(j.rule);
+    renderRules();
+  } else toast(j.message||'保存失败');
+}
+
+// ===== 全局设置 =====
+function renderCfg(){
+  $('sw-global').classList.toggle('on', !!CONFIG.global_enabled);
+  $('sw-global-text').textContent = CONFIG.global_enabled ? '开启' : '关闭';
+  $('sw-md').classList.toggle('on', !!CONFIG.markdown_enabled);
+  $('sw-md-text').textContent = CONFIG.markdown_enabled ? '开启' : '关闭';
+  $('cfg-default-mode').value = CONFIG.default_match_mode || 'fuzzy';
+  $('cfg-stat').innerHTML = '共 <b>'+RULES.length+'</b> 条规则';
+}
+
+async function toggleGlobal(){
+  const next = !CONFIG.global_enabled;
+  const j = await api('/config','POST',{global_enabled: next});
+  if(j.success){ CONFIG = j.config; renderCfg(); toast(next?'已开启总开关':'已关闭总开关'); }
+}
+async function toggleMd(){
+  const next = !CONFIG.markdown_enabled;
+  const j = await api('/config','POST',{markdown_enabled: next});
+  if(j.success){ CONFIG = j.config; renderCfg(); toast(next?'已开启Markdown':'已关闭Markdown'); }
+}
+async function saveConfig(){
+  const j = await api('/config','POST',{default_match_mode: $('cfg-default-mode').value});
+  if(j.success){ CONFIG = j.config; toast('已保存'); }
+  else toast(j.message||'保存失败');
+}
+
+// ===== 测试匹配 =====
+async function runTest(){
+  const content = $('test-content').value;
+  if(!content.trim()){ toast('请输入消息内容'); return; }
+  const isGroup = document.querySelector('input[name=test-scope]:checked').value === 'group';
+  const box = $('test-result');
+  box.classList.remove('hidden');
+  box.innerHTML = '<span class="none">测试中...</span>';
+  const j = await api('/test','POST',{content, is_group: isGroup});
+  if(!j.success){ box.innerHTML = '<span class="none">测试失败</span>'; return; }
+  if(!j.matched){
+    box.innerHTML = '<span class="none">❌ 没有命中任何规则</span>';
+  } else {
+    const r = j.matched;
+    box.innerHTML = '✅ 命中规则: <b>'+esc(r.name)+'</b> '+modePill(r.match_mode)+'<br>'
+      + '优先级: '+(r.priority||0)+' · 作用域: '+r.scope+'<br>'
+      + '<div class="rendered">'+esc(j.reply)+'</div>';
+  }
+}
+
+// 点击遮罩关闭弹窗
+$('editor-mask').onclick = function(e){ if(e.target===this) closeEditor(); };
+
+// 初始化
+applyTheme();
+loadState();
+</script>
+</body>
+</html>
