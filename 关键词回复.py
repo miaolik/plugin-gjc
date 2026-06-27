@@ -128,6 +128,7 @@ def _sanitize_rule(r: dict) -> dict:
         d['ark_type'] = int(r.get('ark_type', 23))
     except (TypeError, ValueError):
         d['ark_type'] = 23
+    d['ark_fields'] = r.get('ark_fields') if isinstance(r.get('ark_fields'), dict) else {}
     d['markdown_template'] = str(r.get('markdown_template', ''))
     d['keyboard_id'] = str(r.get('keyboard_id', ''))
     try:
@@ -351,6 +352,52 @@ def _parse_ark_params(data):
     return normal_params
 
 
+def _build_ark_simple_data(rule):
+    """按结构化 ark_fields 构建 convert_simple_ark_data 所需的简化数据。
+
+    23: (desc, prompt, [[条目desc, 条目link], ...])
+    24: (desc, prompt, title, metadesc, img, link, subtitle)
+    37: (prompt, metatitle, metasubtitle, metacover, metaurl)
+    无 ark_fields 时返回 None (回退到旧的逗号参数解析)。"""
+    f = rule.get('ark_fields') or {}
+    if not isinstance(f, dict) or not f:
+        return None
+    try:
+        t = int(rule.get('ark_type', 23))
+    except (TypeError, ValueError):
+        t = 23
+    if t == 23:
+        lst = []
+        for it in (f.get('list') or []):
+            if not isinstance(it, dict):
+                continue
+            desc = str(it.get('desc', '')).strip()
+            link = str(it.get('link', '')).strip()
+            if desc or link:
+                lst.append([desc, link])
+        return (str(f.get('desc', '')), str(f.get('prompt', '')), lst)
+    if t == 24:
+        return (
+            str(f.get('desc', '')), str(f.get('prompt', '')), str(f.get('title', '')),
+            str(f.get('metadesc', '')), str(f.get('img', '')), str(f.get('link', '')),
+            str(f.get('subtitle', '')),
+        )
+    if t == 37:
+        return (
+            str(f.get('prompt', '')), str(f.get('metatitle', '')), str(f.get('metasubtitle', '')),
+            str(f.get('metacover', '')), str(f.get('metaurl', '')),
+        )
+    return None
+
+
+def _ark_send_data(rule):
+    """优先使用结构化字段; 否则回退旧的逗号参数。"""
+    sd = _build_ark_simple_data(rule)
+    if sd is not None:
+        return sd
+    return tuple(_parse_ark_params(rule.get('reply', '')))
+
+
 # ==================== 被动回复 (多种输出) ====================
 
 
@@ -371,7 +418,7 @@ async def _send_rule_reply(event, rule):
         elif reply_type == 'video':
             await event.reply_video(str(data))
         elif reply_type == 'ark':
-            await event.reply_ark(int(rule.get('ark_type', 23)), tuple(_parse_ark_params(data)))
+            await event.reply_ark(int(rule.get('ark_type', 23)), _ark_send_data(rule))
         else:
             await event.reply(str(data))
     except Exception as e:
@@ -520,7 +567,7 @@ async def _push_rule_to_group(sender, group_id, rule):
     elif reply_type == 'video':
         await _push_media(sender, group_id, data, 2)
     elif reply_type == 'ark':
-        await _push_ark(sender, group_id, int(rule.get('ark_type', 23)), tuple(_parse_ark_params(data)))
+        await _push_ark(sender, group_id, int(rule.get('ark_type', 23)), _ark_send_data(rule))
     else:
         await sender.send_to_group(group_id, str(data))
 

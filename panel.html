@@ -92,6 +92,10 @@
   .taglist{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .tag{background:var(--card2);border:1px solid var(--bd);border-radius:14px;padding:3px 10px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
   .tag .x{cursor:pointer;color:var(--err);font-weight:700}
+  .ex{display:inline-block;margin:4px 6px 0 0;padding:3px 9px;border:1px solid var(--bd);border-radius:8px;cursor:pointer;background:var(--card2);color:var(--mut);font-size:12px}
+  .ex:hover{border-color:var(--accent);color:var(--accent)}
+  .ex code{margin-left:4px;color:var(--accent)}
+  .ark-grp .field{margin-bottom:10px}
 </style>
 </head>
 <body>
@@ -240,7 +244,7 @@
           <option value="ark">ARK 卡片</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field" id="f-reply-wrap">
         <label id="f-reply-label">回复内容</label>
         <textarea id="f-reply" placeholder="回复内容 / 媒体URL / 模板参数"></textarea>
         <div class="hint" id="f-reply-hint"></div>
@@ -249,9 +253,46 @@
         <label>图片附带文字</label>
         <input type="text" id="f-image-text" placeholder="可选, 图片消息附带的文字">
       </div>
-      <div class="field-row hidden" id="f-ark-wrap">
-        <div class="field"><label>ARK 模板ID</label><input type="number" id="f-ark-type" value="23"></div>
+
+      <!-- ARK 结构化字段 -->
+      <div class="hidden" id="f-ark-section">
+        <div class="field">
+          <label>ARK 模板</label>
+          <select id="f-ark-type" onchange="onArkTypeChange()">
+            <option value="23">23 · 文本 + 链接列表</option>
+            <option value="24">24 · 大图文卡片</option>
+            <option value="37">37 · 小图文卡片</option>
+          </select>
+        </div>
+        <div class="card ark-grp hidden" id="ark-23">
+          <div class="hint" style="margin:0 0 10px">23 = 一段描述 + 若干「文字(可带链接)」列表项。</div>
+          <div class="field"><label>描述 desc</label><input type="text" id="a23-desc" placeholder="卡片顶部描述"></div>
+          <div class="field"><label>提示 prompt</label><input type="text" id="a23-prompt" placeholder="消息外显/通知文字"></div>
+          <div class="field"><label>列表项 (每行: 文字|链接)</label>
+            <textarea id="a23-list" placeholder="第一行内容|https://a.com&#10;第二行内容&#10;第三行内容|https://b.com"></textarea>
+            <div class="hint">每行一项, 竖线 <code>|</code> 前为显示文字, 后为可选跳转链接。</div>
+          </div>
+        </div>
+        <div class="card ark-grp hidden" id="ark-24">
+          <div class="hint" style="margin:0 0 10px">24 = 带大图的图文卡片。</div>
+          <div class="field"><label>提示 prompt</label><input type="text" id="a24-prompt" placeholder="消息外显文字"></div>
+          <div class="field"><label>标题 title</label><input type="text" id="a24-title" placeholder="卡片标题"></div>
+          <div class="field"><label>描述 desc</label><input type="text" id="a24-desc" placeholder="卡片描述"></div>
+          <div class="field"><label>子描述 metadesc</label><input type="text" id="a24-metadesc" placeholder="补充描述"></div>
+          <div class="field"><label>大图 img (URL)</label><input type="text" id="a24-img" placeholder="https://...jpg"></div>
+          <div class="field"><label>跳转链接 link</label><input type="text" id="a24-link" placeholder="点击卡片跳转 https://..."></div>
+          <div class="field"><label>副标题 subtitle</label><input type="text" id="a24-subtitle" placeholder="来源/副标题"></div>
+        </div>
+        <div class="card ark-grp hidden" id="ark-37">
+          <div class="hint" style="margin:0 0 10px">37 = 带小图(封面)的图文卡片。</div>
+          <div class="field"><label>提示 prompt</label><input type="text" id="a37-prompt" placeholder="消息外显文字"></div>
+          <div class="field"><label>主标题 metatitle</label><input type="text" id="a37-metatitle" placeholder="标题"></div>
+          <div class="field"><label>副标题 metasubtitle</label><input type="text" id="a37-metasubtitle" placeholder="副标题"></div>
+          <div class="field"><label>封面图 metacover (URL)</label><input type="text" id="a37-metacover" placeholder="https://...jpg"></div>
+          <div class="field"><label>跳转 metaurl</label><input type="text" id="a37-metaurl" placeholder="点击跳转 https://..."></div>
+        </div>
       </div>
+
       <div class="field-row hidden" id="f-tmd-wrap">
         <div class="field"><label>MD 模板ID</label><input type="text" id="f-md-template" placeholder="custom_template_id"></div>
         <div class="field"><label>按钮ID (可选)</label><input type="text" id="f-keyboard-id" placeholder="keyboard id"></div>
@@ -260,9 +301,21 @@
       <div class="card" style="margin:6px 0 14px">
         <div class="check-row"><label><input type="checkbox" id="f-cron-enabled" onchange="onCronChange()"> 启用定时推送 (cron)</label></div>
         <div id="f-cron-detail" class="hidden">
-          <div class="field"><label>Cron 表达式 (分 时 日 月 周)</label><input type="text" id="f-cron-expr" placeholder="如 0 9 * * * = 每天9点"></div>
-          <div class="field"><label>推送目标群号</label><input type="text" id="f-cron-groups" placeholder="多个群号用逗号/换行分隔"></div>
-          <div class="hint">到点会主动按上面的「输出方式」推送「回复内容」到这些群。</div>
+          <div class="field">
+            <label>Cron 表达式 (分 时 日 月 周)</label>
+            <input type="text" id="f-cron-expr" placeholder="如  0 9 * * *  (每天 9:00)" style="width:100%">
+            <div class="hint">点击示例直接填入:<br>
+              <span class="ex" onclick="setCron('0 9 * * *')">每天9点<code>0 9 * * *</code></span>
+              <span class="ex" onclick="setCron('30 8 * * *')">每天8:30<code>30 8 * * *</code></span>
+              <span class="ex" onclick="setCron('0 * * * *')">每小时整点<code>0 * * * *</code></span>
+              <span class="ex" onclick="setCron('*/30 * * * *')">每30分钟<code>*/30 * * * *</code></span>
+              <span class="ex" onclick="setCron('0 9 * * 1')">每周一9点<code>0 9 * * 1</code></span>
+              <span class="ex" onclick="setCron('0 12 1 * *')">每月1号12点<code>0 12 1 * *</code></span>
+              <span class="ex" onclick="setCron('0 0,12 * * *')">每天0点和12点<code>0 0,12 * * *</code></span>
+            </div>
+          </div>
+          <div class="field"><label>推送目标群号</label><textarea id="f-cron-groups" placeholder="多个群号用逗号或换行分隔, 一行一个更清晰" style="min-height:90px"></textarea></div>
+          <div class="hint">到点会主动按上面的「输出方式」推送内容到这些群。</div>
         </div>
       </div>
 
@@ -425,13 +478,48 @@ async function reject(seq){
 // ===== editor =====
 function onScopeChange(){ $('f-group-wrap').classList.toggle('hidden', $('f-scope').value!=='group'); }
 function onCronChange(){ $('f-cron-detail').classList.toggle('hidden', !$('f-cron-enabled').checked); }
+function setCron(v){ $('f-cron-expr').value=v; }
+function onArkTypeChange(){
+  let t=$('f-ark-type').value;
+  if(!t){ $('f-ark-type').value='23'; t='23'; }
+  $('ark-23').classList.toggle('hidden', t!=='23');
+  $('ark-24').classList.toggle('hidden', t!=='24');
+  $('ark-37').classList.toggle('hidden', t!=='37');
+}
+function fillArkFields(f){
+  f=f||{};
+  $('a23-desc').value=f.desc||''; $('a23-prompt').value=f.prompt||'';
+  $('a23-list').value=(f.list||[]).map(it=>(it.desc||'')+(it.link?('|'+it.link):'')).join('\n');
+  $('a24-prompt').value=f.prompt||''; $('a24-title').value=f.title||''; $('a24-desc').value=f.desc||'';
+  $('a24-metadesc').value=f.metadesc||''; $('a24-img').value=f.img||''; $('a24-link').value=f.link||''; $('a24-subtitle').value=f.subtitle||'';
+  $('a37-prompt').value=f.prompt||''; $('a37-metatitle').value=f.metatitle||''; $('a37-metasubtitle').value=f.metasubtitle||'';
+  $('a37-metacover').value=f.metacover||''; $('a37-metaurl').value=f.metaurl||'';
+}
+function collectArkFields(t){
+  if(t==='23'){
+    const list=$('a23-list').value.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
+      const i=l.indexOf('|'); return i<0?{desc:l,link:''}:{desc:l.slice(0,i).trim(),link:l.slice(i+1).trim()};
+    });
+    return {desc:$('a23-desc').value, prompt:$('a23-prompt').value, list};
+  }
+  if(t==='24'){
+    return {prompt:$('a24-prompt').value, title:$('a24-title').value, desc:$('a24-desc').value,
+      metadesc:$('a24-metadesc').value, img:$('a24-img').value, link:$('a24-link').value, subtitle:$('a24-subtitle').value};
+  }
+  return {prompt:$('a37-prompt').value, metatitle:$('a37-metatitle').value, metasubtitle:$('a37-metasubtitle').value,
+    metacover:$('a37-metacover').value, metaurl:$('a37-metaurl').value};
+}
 function onTypeChange(){
   const t=$('f-reply-type').value;
-  const map={text:'回复内容',markdown:'Markdown 内容',template_markdown:'模板参数 (逗号分隔)',image:'图片 URL',voice:'语音 URL',video:'视频 URL',ark:'ARK 参数 (逗号分隔)'};
+  const isArk = t==='ark';
+  const map={text:'回复内容',markdown:'Markdown 内容',template_markdown:'模板参数 (逗号分隔)',image:'图片 URL',voice:'语音 URL',video:'视频 URL'};
   $('f-reply-label').textContent=map[t]||'回复内容';
+  // ARK 用结构化字段, 隐藏通用回复内容框
+  $('f-reply-wrap').classList.toggle('hidden', isArk);
+  $('f-ark-section').classList.toggle('hidden', !isArk);
   $('f-image-text-wrap').classList.toggle('hidden', t!=='image');
-  $('f-ark-wrap').classList.toggle('hidden', t!=='ark');
   $('f-tmd-wrap').classList.toggle('hidden', t!=='template_markdown');
+  if(isArk) onArkTypeChange();
 }
 function openEditor(rule){
   const r=rule&&rule.id?rule:null;
@@ -446,7 +534,9 @@ function openEditor(rule){
   $('f-reply-type').value=r?r.reply_type:'text';
   $('f-reply').value=r?r.reply:'';
   $('f-image-text').value=r?(r.image_text||''):'';
-  $('f-ark-type').value=r?(r.ark_type||23):23;
+  // ARK: 非 ark 时模板留空; ark 时载入结构化字段
+  $('f-ark-type').value = (r && r.reply_type==='ark') ? (r.ark_type||23) : '';
+  fillArkFields((r && r.ark_fields) || {});
   $('f-md-template').value=r?(r.markdown_template||''):'';
   $('f-keyboard-id').value=r?(r.keyboard_id||''):'';
   $('f-cron-enabled').checked=r?!!r.cron_enabled:false;
@@ -468,7 +558,6 @@ async function saveRule(){
     reply_type: $('f-reply-type').value,
     reply: $('f-reply').value,
     image_text: $('f-image-text').value,
-    ark_type: parseInt($('f-ark-type').value)||23,
     markdown_template: $('f-md-template').value.trim(),
     keyboard_id: $('f-keyboard-id').value.trim(),
     priority: parseInt($('f-priority').value)||0,
@@ -477,6 +566,15 @@ async function saveRule(){
     cron_expr: $('f-cron-expr').value.trim(),
     cron_group_ids: $('f-cron-groups').value,
   };
+  if(body.reply_type==='ark'){
+    const at=$('f-ark-type').value||'23';
+    body.ark_type=parseInt(at)||23;
+    body.ark_fields=collectArkFields(at);
+    body.keyword=body.keyword;  // keyword 仍需填写
+  }else{
+    body.ark_type=0;            // 非 ark 不设模板
+    body.ark_fields={};
+  }
   if(!body.keyword.trim()){ toast('关键词不能为空'); return; }
   if(body.scope==='group' && !body.group_id){ toast('分群规则需填写群号'); return; }
   const r=await api('/rule','POST',body);
