@@ -103,6 +103,7 @@ def _default_data() -> dict:
     return {
         'global_enabled': True,
         'forbid_group': False,
+        'notify_reject': True,
         'super_admins': list(_DEFAULT_SUPER_ADMINS),
         'group_enabled': {},
         'rules': [],
@@ -153,6 +154,8 @@ def _normalize(raw) -> dict:
         d['global_enabled'] = bool(raw.get('global_enabled'))
     if 'forbid_group' in raw:
         d['forbid_group'] = bool(raw.get('forbid_group'))
+    if 'notify_reject' in raw:
+        d['notify_reject'] = bool(raw.get('notify_reject'))
     if isinstance(raw.get('super_admins'), list) and raw['super_admins']:
         d['super_admins'] = [str(a) for a in raw['super_admins'] if str(a).strip()]
     if isinstance(raw.get('group_enabled'), dict):
@@ -243,6 +246,7 @@ _MGMT_PREFIXES = (
     '关键词开启', '关键词关闭',
     '一键开启分群', '一键关闭分群',
     '禁止分群开启', '禁止分群关闭',
+    '拒绝通知开启', '拒绝通知关闭',
     '新增全局关键词', '删除全局关键词',
     '新增关键词', '删除关键词',
     '待审核', '通过', '拒绝',
@@ -922,6 +926,28 @@ async def disable_forbid_group(event, match):
     await event.reply('✅ 已解除禁止分群\n各群可自行开启关键词; 之前已关闭的群仍保持关闭(需手动开启)。\n' + nav)
 
 
+@handler(r'^拒绝通知开启$', name='拒绝通知开启', desc='开启审核拒绝时通知提交群 (超管)', ignore_at_check=True)
+async def enable_notify_reject(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作')
+        return
+    _data['notify_reject'] = True
+    _save()
+    nav = ' '.join([_btn('拒绝通知关闭', '拒绝通知关闭'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply('✅ 已开启「拒绝通知」\n审核拒绝时会私发/群发告知提交群被驳回。\n' + nav)
+
+
+@handler(r'^拒绝通知关闭$', name='拒绝通知关闭', desc='关闭审核拒绝时的通知 (超管)', ignore_at_check=True)
+async def disable_notify_reject(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作')
+        return
+    _data['notify_reject'] = False
+    _save()
+    nav = ' '.join([_btn('拒绝通知开启', '拒绝通知开启'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply('🛑 已关闭「拒绝通知」\n审核拒绝时不再通知提交群。\n' + nav)
+
+
 # ==================== 指令: 新增/删除 (本群, 带审核) ====================
 
 
@@ -1000,7 +1026,7 @@ async def _notify_super_admins_pending(event, pending):
     if not sender:
         log.warning('无可用 sender, 无法私信通知超管待审核')
         return
-    btn = _btn(f'通过 {pending["seq"]}', f'通过 {pending["seq"]}')
+    btn = ' '.join([_btn(f'通过 {pending["seq"]}', f'通过 {pending["seq"]}'), _btn(f'拒绝 {pending["seq"]}', f'拒绝 {pending["seq"]}')])
     text = (
         '📩 关键词新增待审核\n'
         f'序号: {pending["seq"]}\n'
@@ -1109,11 +1135,10 @@ async def list_pending(event, match):
     for p in pend:
         lines.append(f'序号 {p["seq"]} | 群 {p["group_id"]} | 提交 {p["submitter_name"]}')
         lines.append(f'    关键词「{p["keyword"]}」→ {p["reply"]}')
-    btns = []
     for p in pend[:20]:
-        btns.append(_btn(f'通过 {p["seq"]}', f'通过 {p["seq"]}'))
-    lines.append('\n' + ' '.join(btns))
-    lines.append(_btn('关键词菜单', '关键词菜单'))
+        pair = ' '.join([_btn(f'通过 {p["seq"]}', f'通过 {p["seq"]}'), _btn(f'拒绝 {p["seq"]}', f'拒绝 {p["seq"]}')])
+        lines.append(f'序号 {p["seq"]}: {pair}')
+    lines.append('\n' + _btn('关键词菜单', '关键词菜单'))
     await event.reply('\n'.join(lines))
 
 
@@ -1169,14 +1194,24 @@ async def reject_pending(event, match):
         await event.reply('用法: 拒绝 序号 [序号...]')
         return
     pend = _data.get('pending', [])
-    rejected = [int(p.get('seq')) for p in pend if int(p.get('seq')) in seqs]
+    notify = [p for p in pend if int(p.get('seq')) in seqs]
+    rejected = [int(p.get('seq')) for p in notify]
     _data['pending'] = [p for p in pend if int(p.get('seq')) not in rejected]
     _save()
     nav = ' '.join([_btn('待审核', '待审核'), _btn('关键词菜单', '关键词菜单')])
-    if rejected:
-        await event.reply(f'🛑 已拒绝审核序号: {" ".join(str(s) for s in rejected)}\n' + nav)
-    else:
+    if not rejected:
         await event.reply('未找到对应序号的待审核项\n' + nav)
+        return
+    if _data.get('notify_reject', True):
+        sender = getattr(event, 'sender', None) or _get_sender()
+        if sender:
+            for p in notify:
+                try:
+                    target = p.get('group_openid') or p.get('group_id')
+                    await sender.send_to_group(target, f'🛑 关键词「{p.get("keyword")}」未通过审核，已被超管拒绝。')
+                except Exception as e:
+                    log.warning(f'通知群 {p.get("group_id")} 审核拒绝失败: {e}')
+    await event.reply(f'🛑 已拒绝审核序号: {" ".join(str(s) for s in rejected)}\n' + nav)
 
 
 # ==================== 指令: 列表 ====================
@@ -1256,6 +1291,7 @@ async def menu(event, match):
         '· 待审核：查看待审核列表',
         '· 通过 序号 [序号...]：通过 (可多个, 如 通过 1 2)',
         '· 拒绝 序号 [序号...]：驳回',
+        '· 拒绝通知开启 / 拒绝通知关闭：是否在拒绝时通知提交群',
         '',
         '【查看】',
         '· 关键词列表：超管看全部+本群; 群主/管理看本群',
@@ -1292,6 +1328,7 @@ async def api_state(request):
         'config': {
             'global_enabled': _data.get('global_enabled', True),
             'forbid_group': _data.get('forbid_group', False),
+            'notify_reject': _data.get('notify_reject', True),
             'super_admins': _data.get('super_admins', []),
             'group_enabled': _data.get('group_enabled', {}),
         },
@@ -1307,6 +1344,8 @@ async def api_config(request):
         _data['global_enabled'] = bool(body['global_enabled'])
     if 'forbid_group' in body:
         _data['forbid_group'] = bool(body['forbid_group'])
+    if 'notify_reject' in body:
+        _data['notify_reject'] = bool(body['notify_reject'])
     if isinstance(body.get('super_admins'), list):
         _data['super_admins'] = [str(a).strip() for a in body['super_admins'] if str(a).strip()]
     if isinstance(body.get('group_enabled'), dict):
