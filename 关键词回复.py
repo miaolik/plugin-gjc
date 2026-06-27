@@ -408,12 +408,62 @@ def _ark_send_data(rule):
     return tuple(_parse_ark_params(rule.get('reply', '')))
 
 
+# ==================== 变量替换 ====================
+
+_VAR_TOKEN_RE = re.compile(r'\{([A-Za-z0-9_]+)\}')
+
+
+def _build_vars(rule, content, event):
+    """构建可在回复内容里引用的变量字典。
+
+    - 正则捕获: {0}=整段命中, {1}/{2}...=捕获组, {名字}=命名组
+    - 上下文: {content} {user_id} {group_id} {nickname}
+    - 时间: {date} {time} {datetime}
+    """
+    now = datetime.datetime.now()
+    variables = {
+        'content': content or '',
+        'user_id': str(getattr(event, 'user_id', '') or ''),
+        'group_id': str(getattr(event, 'group_id', '') or ''),
+        'nickname': str(getattr(event, 'username', '') or getattr(event, 'nickname', '') or ''),
+        'date': now.strftime('%Y-%m-%d'),
+        'time': now.strftime('%H:%M:%S'),
+        'datetime': now.strftime('%Y-%m-%d %H:%M:%S'),
+    }
+    if rule.get('match_mode') == 'regex' and content:
+        try:
+            mo = re.search(rule.get('keyword', ''), content, re.DOTALL)
+        except re.error:
+            mo = None
+        if mo:
+            variables['0'] = mo.group(0)
+            for i, g in enumerate(mo.groups(), start=1):
+                variables[str(i)] = g if g is not None else ''
+            for k, v in (mo.groupdict() or {}).items():
+                variables[k] = v if v is not None else ''
+    return variables
+
+
+def _apply_vars(text, variables):
+    """替换已识别的 {变量}; 未识别的 {...} 原样保留 (不破坏 markdown/ark)。"""
+    if not text:
+        return text
+
+    def _repl(mo):
+        key = mo.group(1)
+        return str(variables[key]) if key in variables else mo.group(0)
+
+    return _VAR_TOKEN_RE.sub(_repl, str(text))
+
+
 # ==================== 被动回复 (多种输出) ====================
 
 
-async def _send_rule_reply(event, rule):
+async def _send_rule_reply(event, rule, content=''):
     reply_type = rule.get('reply_type', 'text')
-    data = rule.get('reply', '')
+    variables = _build_vars(rule, content, event)
+    data = _apply_vars(rule.get('reply', ''), variables)
+    image_text = _apply_vars(rule.get('image_text', ''), variables)
     try:
         if reply_type == 'text':
             await event.reply(str(data), msg_type=MessageType.MSG_TYPE_TEXT)
@@ -422,7 +472,7 @@ async def _send_rule_reply(event, rule):
         elif reply_type == 'template_markdown':
             await _reply_template_markdown(event, rule, data)
         elif reply_type == 'image':
-            await event.reply_image(str(data), rule.get('image_text', ''))
+            await event.reply_image(str(data), image_text)
         elif reply_type == 'voice':
             await event.reply_voice(str(data))
         elif reply_type == 'video':
@@ -563,7 +613,10 @@ async def _push_template_markdown(sender, group_id, rule, data):
 
 async def _push_rule_to_group(sender, group_id, rule):
     reply_type = rule.get('reply_type', 'text')
-    data = rule.get('reply', '')
+    # 主动推送无消息/捕获, 仅时间类与 {group_id} 等变量可用
+    variables = _build_vars(rule, '', type('E', (), {'group_id': group_id})())
+    data = _apply_vars(rule.get('reply', ''), variables)
+    image_text = _apply_vars(rule.get('image_text', ''), variables)
     if reply_type == 'text':
         await sender.send_to_group(group_id, str(data), msg_type=MessageType.MSG_TYPE_TEXT)
     elif reply_type == 'markdown':
@@ -571,7 +624,7 @@ async def _push_rule_to_group(sender, group_id, rule):
     elif reply_type == 'template_markdown':
         await _push_template_markdown(sender, group_id, rule, data)
     elif reply_type == 'image':
-        await _push_media(sender, group_id, data, 1, rule.get('image_text', ''))
+        await _push_media(sender, group_id, data, 1, image_text)
     elif reply_type == 'voice':
         await _push_media(sender, group_id, data, 3)
     elif reply_type == 'video':
@@ -726,7 +779,7 @@ async def autoreply_dispatcher(event, match):
     rule = _find_rule(content, gid)
     if not rule:
         return
-    await _send_rule_reply(event, rule)
+    await _send_rule_reply(event, rule, content)
 
 
 # ==================== 指令: 开关 ====================
