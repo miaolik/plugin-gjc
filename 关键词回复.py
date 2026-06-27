@@ -430,11 +430,21 @@ def _build_vars(rule, content, event):
         'time': now.strftime('%H:%M:%S'),
         'datetime': now.strftime('%Y-%m-%d %H:%M:%S'),
     }
-    if rule.get('match_mode') == 'regex' and content:
+    # 捕获变量 {0}/{1}/{名字}: 任意匹配模式都尝试 (关键词作为正则去 search;
+    # 模糊/完全模式下关键词通常是字面量, {0} 即命中的文本; 含捕获组才有 {1}+)
+    kw = rule.get('keyword', '')
+    if content and kw:
+        mo = None
         try:
-            mo = re.search(rule.get('keyword', ''), content, re.DOTALL)
+            mo = re.search(kw, content, re.DOTALL)
         except re.error:
             mo = None
+        if mo is None:
+            # 关键词含正则元字符但本意是字面量时, 退回按字面量定位
+            try:
+                mo = re.search(re.escape(kw), content, re.DOTALL)
+            except re.error:
+                mo = None
         if mo:
             variables['0'] = mo.group(0)
             for i, g in enumerate(mo.groups(), start=1):
