@@ -222,9 +222,9 @@
       <table>
         <thead><tr><th style="width:130px">变量</th><th>含义</th></tr></thead>
         <tbody>
-          <tr><td class="mono">{0}</td><td>正则整段命中的文本 (仅正则模式)</td></tr>
-          <tr><td class="mono">{1} {2} …</td><td>正则第 1/2… 个捕获组 (仅正则模式)</td></tr>
-          <tr><td class="mono">{名字}</td><td>命名捕获组 <code>(?P&lt;名字&gt;...)</code> (仅正则模式)</td></tr>
+          <tr><td class="mono">{0}</td><td>命中的整段文本 (任意匹配模式)</td></tr>
+          <tr><td class="mono">{1} {2} …</td><td>第 1/2… 个捕获组 (关键词需含 <code>(...)</code> 捕获组)</td></tr>
+          <tr><td class="mono">{名字}</td><td>命名捕获组 <code>(?P&lt;名字&gt;...)</code></td></tr>
           <tr><td class="mono">{content}</td><td>触发的原始消息全文</td></tr>
           <tr><td class="mono">{user_id}</td><td>发言者 openid</td></tr>
           <tr><td class="mono">{group_id}</td><td>群号</td></tr>
@@ -235,9 +235,9 @@
         </tbody>
       </table>
       <div class="hint" style="margin-top:12px">
-        <b>示例一</b> (正则捕获): 关键词 <code>查(\d+)</code>, 回复 <code>你查的是第 {1} 号</code> → 有人发「查8」会回复「你查的是第 8 号」。<br>
-        <b>示例二</b> (上下文): 回复 <code>欢迎 {nickname} 加入本群~</code>。<br>
-        <b>说明</b>: 定时主动推送无消息/捕获, 仅 {date}/{time}/{datetime}/{group_id} 生效。
+        <b>示例一</b> (捕获组, 需正则模式): 关键词 <code>查(\d+)</code>, 回复 <code>你查的是第 {1} 号</code> → 有人发「查8」会回复「你查的是第 8 号」。<br>
+        <b>示例二</b> (上下文, 任意模式): 回复 <code>欢迎 {nickname} 加入本群~</code>。<br>
+        <b>说明</b>: {0}/{content}/{nickname}/时间 等变量在模糊/完全模式同样生效; {1}+ 需关键词写成正则并带 <code>(...)</code> 捕获组。定时主动推送无消息/捕获, 仅 {date}/{time}/{datetime}/{group_id} 生效。
       </div>
     </div>
   </div>
