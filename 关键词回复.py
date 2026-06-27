@@ -466,6 +466,21 @@ def _apply_vars(text, variables):
     return _VAR_TOKEN_RE.sub(_repl, str(text))
 
 
+def _normalize_md(text):
+    """规整原生 markdown 文本, 让换行/标题/引用在 QQ 客户端可靠生效。
+
+    - 把面板里手打的转义序列 (\\n \\r \\t) 还原成真实字符;
+    - QQ 原生 markdown 里单个换行常被吞掉, 统一改成「空行分段」, 这样
+      每行成为独立段落, 换行可见, 行首的 ### 标题 / > 引用 也能正常解析。
+    """
+    s = str(text or '')
+    s = s.replace('\\r\\n', '\n').replace('\\n', '\n').replace('\\r', '\n').replace('\\t', '\t')
+    s = s.replace('\r\n', '\n').replace('\r', '\n')
+    lines = [ln.rstrip() for ln in s.split('\n')]
+    lines = [ln for ln in lines if ln.strip() != '']
+    return '\n\n'.join(lines)
+
+
 # ==================== 被动回复 (多种输出) ====================
 
 
@@ -478,7 +493,7 @@ async def _send_rule_reply(event, rule, content=''):
         if reply_type == 'text':
             await event.reply(str(data), msg_type=MessageType.MSG_TYPE_TEXT)
         elif reply_type == 'markdown':
-            await event.reply(str(data), msg_type=MessageType.MSG_TYPE_MARKDOWN)
+            await event.reply(_normalize_md(data), msg_type=MessageType.MSG_TYPE_MARKDOWN)
         elif reply_type == 'template_markdown':
             await _reply_template_markdown(event, rule, data)
         elif reply_type == 'image':
@@ -630,7 +645,7 @@ async def _push_rule_to_group(sender, group_id, rule):
     if reply_type == 'text':
         await sender.send_to_group(group_id, str(data), msg_type=MessageType.MSG_TYPE_TEXT)
     elif reply_type == 'markdown':
-        await sender.send_to_group(group_id, str(data), msg_type=MessageType.MSG_TYPE_MARKDOWN)
+        await sender.send_to_group(group_id, _normalize_md(data), msg_type=MessageType.MSG_TYPE_MARKDOWN)
     elif reply_type == 'template_markdown':
         await _push_template_markdown(sender, group_id, rule, data)
     elif reply_type == 'image':
