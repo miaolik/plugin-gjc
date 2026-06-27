@@ -107,6 +107,7 @@
     <div class="tab" data-tab="pending">待审核<span id="pend-badge" class="badge hidden">0</span></div>
     <div class="tab" data-tab="cfg">全局设置</div>
     <div class="tab" data-tab="test">测试匹配</div>
+    <div class="tab" data-tab="vars">变量说明</div>
   </div>
 
   <!-- ========== 规则列表 ========== -->
@@ -213,6 +214,34 @@
     </div>
   </div>
 
+  <!-- ========== 变量说明 ========== -->
+  <div id="tab-vars" class="hidden">
+    <div class="card">
+      <label style="display:block;margin-bottom:6px">回复内容可用变量</label>
+      <div class="hint" style="margin-bottom:12px">在「回复内容」/「图片附带文字」里写 <code>{变量}</code> 即可。未识别的 <code>{...}</code> 会原样保留 (不影响 markdown/ark)。</div>
+      <table>
+        <thead><tr><th style="width:130px">变量</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">{0}</td><td>正则整段命中的文本 (仅正则模式)</td></tr>
+          <tr><td class="mono">{1} {2} …</td><td>正则第 1/2… 个捕获组 (仅正则模式)</td></tr>
+          <tr><td class="mono">{名字}</td><td>命名捕获组 <code>(?P&lt;名字&gt;...)</code> (仅正则模式)</td></tr>
+          <tr><td class="mono">{content}</td><td>触发的原始消息全文</td></tr>
+          <tr><td class="mono">{user_id}</td><td>发言者 openid</td></tr>
+          <tr><td class="mono">{group_id}</td><td>群号</td></tr>
+          <tr><td class="mono">{nickname}</td><td>发言者昵称</td></tr>
+          <tr><td class="mono">{date}</td><td>当前日期, 如 2026-06-24</td></tr>
+          <tr><td class="mono">{time}</td><td>当前时间, 如 09:30:00</td></tr>
+          <tr><td class="mono">{datetime}</td><td>当前日期时间</td></tr>
+        </tbody>
+      </table>
+      <div class="hint" style="margin-top:12px">
+        <b>示例一</b> (正则捕获): 关键词 <code>查(\d+)</code>, 回复 <code>你查的是第 {1} 号</code> → 有人发「查8」会回复「你查的是第 8 号」。<br>
+        <b>示例二</b> (上下文): 回复 <code>欢迎 {nickname} 加入本群~</code>。<br>
+        <b>说明</b>: 定时主动推送无消息/捕获, 仅 {date}/{time}/{datetime}/{group_id} 生效。
+      </div>
+    </div>
+  </div>
+
   <!-- ========== 规则编辑弹窗 ========== -->
   <div class="modal-mask" id="editor-mask">
     <div class="modal">
@@ -262,7 +291,7 @@
       <div class="field" id="f-reply-wrap">
         <label id="f-reply-label">回复内容</label>
         <textarea id="f-reply" placeholder="回复内容 / 媒体URL / 模板参数"></textarea>
-        <div class="hint" id="f-reply-hint"></div>
+        <div class="hint" id="f-reply-hint">支持变量 <code>{1}</code> <code>{nickname}</code> <code>{date}</code> 等, 详见顶部「变量说明」标签页。</div>
       </div>
       <div class="field hidden" id="f-image-text-wrap">
         <label>图片附带文字</label>
@@ -380,7 +409,7 @@ function applyTheme(){
 
 function switchTab(t){
   document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('on', e.dataset.tab===t));
-  ['rules','pending','cfg','test'].forEach(x=>$('tab-'+x).classList.toggle('hidden', x!==t));
+  ['rules','pending','cfg','test','vars'].forEach(x=>$('tab-'+x).classList.toggle('hidden', x!==t));
   if(t==='cfg') renderCfg();
   if(t==='pending') renderPending();
 }
