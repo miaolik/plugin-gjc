@@ -115,10 +115,12 @@
       <div class="toolbar">
         <button onclick="openEditor()">+ 添加规则</button>
         <button class="ghost" onclick="loadState()">↻ 刷新</button>
+        <button class="ghost" id="btn-batch-del" onclick="batchDelete()" disabled>🗑 删除选中 (<span id="sel-count">0</span>)</button>
         <span id="rules-stat" class="stat"></span>
       </div>
       <table>
         <thead><tr>
+          <th style="width:36px"><input type="checkbox" id="sel-all" onclick="toggleSelectAll()"></th>
           <th style="width:54px">启用</th>
           <th>关键词 / 回复</th>
           <th style="width:70px">匹配</th>
@@ -155,6 +157,19 @@
         <label>全局开关</label>
         <div class="switch" id="sw-global" onclick="toggleGlobal()"><span class="knob"></span><span id="sw-global-text">关闭</span></div>
         <div class="hint">控制「全局关键词」是否对所有群生效 (分群关键词由各群开关控制)。</div>
+      </div>
+      <div class="row">
+        <label>禁止分群</label>
+        <div class="switch" id="sw-forbid" onclick="toggleForbid()"><span class="knob"></span><span id="sw-forbid-text">关闭</span></div>
+        <div class="hint">开启后各群无法自行开启/新增关键词, 并立即关闭所有分群开关 (超管豁免)。</div>
+      </div>
+      <div class="row">
+        <label>一键分群</label>
+        <div style="display:flex;gap:8px">
+          <button class="ghost" onclick="bulkGroup(true)">全部开启</button>
+          <button class="ghost" onclick="bulkGroup(false)">全部关闭</button>
+        </div>
+        <div class="hint">批量开启/关闭下方「各群开关」表里的所有分群。</div>
       </div>
       <div class="row" style="display:block">
         <label style="display:block;margin-bottom:8px">超级管理员 openid</label>
@@ -392,6 +407,7 @@ function renderRules(){
     const tr=document.createElement('tr');
     const scope = r.scope==='global' ? '<span class="pill global">全局</span>' : `<span class="pill group">群 ${esc((r.group_id||'').slice(0,6))}…</span>`;
     tr.innerHTML=`
+      <td><input type="checkbox" class="row-sel" data-id="${r.id}" ${SELECTED.has(r.id)?'checked':''} onclick="onRowSel('${r.id}',this.checked)"></td>
       <td><div class="switch ${r.enabled?'on':''}" onclick="toggleRule('${r.id}',${!r.enabled})"><span class="knob"></span></div></td>
       <td><div><b>${esc(r.keyword)}</b></div><div class="mono" style="color:var(--mut)">${esc(String(r.reply||'').slice(0,46))}</div></td>
       <td><span class="pill">${MODE_LABEL[r.match_mode]||r.match_mode}</span></td>
@@ -404,6 +420,28 @@ function renderRules(){
       </div></td>`;
     body.appendChild(tr);
   });
+  updateSelUI();
+}
+
+const SELECTED=new Set();
+function onRowSel(id,checked){ if(checked) SELECTED.add(id); else SELECTED.delete(id); updateSelUI(); }
+function toggleSelectAll(){
+  const on=$('sel-all').checked;
+  SELECTED.clear();
+  if(on) RULES.forEach(r=>SELECTED.add(r.id));
+  document.querySelectorAll('.row-sel').forEach(c=>c.checked=on);
+  updateSelUI();
+}
+function updateSelUI(){
+  $('sel-count').textContent=SELECTED.size;
+  $('btn-batch-del').disabled = SELECTED.size===0;
+  const sa=$('sel-all'); if(sa) sa.checked = RULES.length>0 && SELECTED.size===RULES.length;
+}
+async function batchDelete(){
+  if(SELECTED.size===0) return;
+  if(!confirm(`确认删除选中的 ${SELECTED.size} 条规则?`)) return;
+  const r=await api('/delete_batch','POST',{ids:[...SELECTED]});
+  if(r.success){ toast(`已删除 ${r.removed} 条`); SELECTED.clear(); loadState(); } else toast(r.message||'删除失败');
 }
 
 function renderPending(){
@@ -426,6 +464,8 @@ function renderPending(){
 function renderCfg(){
   const on=!!CONFIG.global_enabled;
   $('sw-global').classList.toggle('on', on); $('sw-global-text').textContent= on?'开启':'关闭';
+  const fb=!!CONFIG.forbid_group;
+  $('sw-forbid').classList.toggle('on', fb); $('sw-forbid-text').textContent= fb?'开启':'关闭';
   const sl=$('sa-list'); sl.innerHTML='';
   (CONFIG.super_admins||[]).forEach((a,i)=>{
     const t=document.createElement('span'); t.className='tag';
@@ -444,6 +484,17 @@ function renderCfg(){
 
 function toggleGlobal(){ CONFIG.global_enabled=!CONFIG.global_enabled; renderCfg(); }
 function toggleGroup(g){ CONFIG.group_enabled[g]=!CONFIG.group_enabled[g]; renderCfg(); }
+async function toggleForbid(){
+  const next=!CONFIG.forbid_group;
+  if(next && !confirm('开启禁止分群会立即关闭所有分群开关, 确认?')) return;
+  const r=await api('/forbid_group','POST',{enabled:next});
+  if(r.success){ toast(next?`已开启禁止分群 (关闭 ${r.closed} 个群)`:'已解除禁止分群'); loadState(); } else toast('操作失败');
+}
+async function bulkGroup(enabled){
+  if(!confirm(enabled?'全部开启所有分群开关?':'全部关闭所有分群开关?')) return;
+  const r=await api('/bulk_group','POST',{enabled});
+  if(r.success){ toast(`已${enabled?'开启':'关闭'} (${r.changed} 个群变更)`); loadState(); } else toast('操作失败');
+}
 function addSuperAdmin(){
   const v=$('sa-input').value.trim(); if(!v) return;
   CONFIG.super_admins=CONFIG.super_admins||[]; if(!CONFIG.super_admins.includes(v)) CONFIG.super_admins.push(v);
@@ -453,7 +504,7 @@ $('sa-input')&&($('sa-input').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefau
 function rmSuperAdmin(i){ CONFIG.super_admins.splice(i,1); renderCfg(); }
 
 async function saveConfig(){
-  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
+  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
   if(r.success){ toast('已保存'); loadState(); } else toast('保存失败');
 }
 

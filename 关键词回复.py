@@ -102,6 +102,7 @@ _data: dict = {}
 def _default_data() -> dict:
     return {
         'global_enabled': True,
+        'forbid_group': False,
         'super_admins': list(_DEFAULT_SUPER_ADMINS),
         'group_enabled': {},
         'rules': [],
@@ -150,6 +151,8 @@ def _normalize(raw) -> dict:
         return d
     if 'global_enabled' in raw:
         d['global_enabled'] = bool(raw.get('global_enabled'))
+    if 'forbid_group' in raw:
+        d['forbid_group'] = bool(raw.get('forbid_group'))
     if isinstance(raw.get('super_admins'), list) and raw['super_admins']:
         d['super_admins'] = [str(a) for a in raw['super_admins'] if str(a).strip()]
     if isinstance(raw.get('group_enabled'), dict):
@@ -208,6 +211,11 @@ def _global_enabled() -> bool:
     return bool(_data.get('global_enabled'))
 
 
+def _forbid_group() -> bool:
+    """禁止分群: 为 True 时分群无法自行开启关键词 (超管豁免)"""
+    return bool(_data.get('forbid_group'))
+
+
 def _normalize_group_ids(raw):
     if isinstance(raw, str):
         raw = re.split(r'[,\n，\s]+', raw)
@@ -233,6 +241,8 @@ _MGMT_PREFIXES = (
     '关键词菜单', '关键词列表',
     '关键词全局开启', '关键词全局关闭',
     '关键词开启', '关键词关闭',
+    '一键开启分群', '一键关闭分群',
+    '禁止分群开启', '禁止分群关闭',
     '新增全局关键词', '删除全局关键词',
     '新增关键词', '删除关键词',
     '待审核', '通过', '拒绝',
@@ -730,6 +740,9 @@ async def enable_group(event, match):
     if not (_is_admin_or_owner(event) or _is_super_admin(event)):
         await event.reply('仅管理员或群主可操作')
         return
+    if _forbid_group() and not _is_super_admin(event):
+        await event.reply('🔒 超管已开启「禁止分群」, 本群无法开启关键词。如需使用请联系超管。')
+        return
     _data.setdefault('group_enabled', {})[str(event.group_id)] = True
     _save()
     nav = ' '.join([_btn('新增关键词', '新增关键词', enter=False), _btn('关键词关闭', '关键词关闭'), _btn('关键词菜单', '关键词菜单')])
@@ -772,6 +785,65 @@ async def disable_global(event, match):
     await event.reply('🛑 已关闭全局关键词\n' + nav)
 
 
+# ==================== 指令: 一键开关 / 禁止分群 (超管) ====================
+
+
+def _bulk_set_groups(value: bool) -> int:
+    """把所有已记录的分群开关统一设为 value, 返回受影响的群数。"""
+    enabled = _data.setdefault('group_enabled', {})
+    changed = 0
+    for gid in list(enabled.keys()):
+        if bool(enabled.get(gid)) != value:
+            changed += 1
+        enabled[gid] = value
+    return changed
+
+
+@handler(r'^一键开启分群$', name='一键开启分群', desc='开启所有已记录分群的关键词开关 (超管)', ignore_at_check=True)
+async def bulk_enable_groups(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作')
+        return
+    n = _bulk_set_groups(True)
+    _save()
+    nav = ' '.join([_btn('一键关闭分群', '一键关闭分群'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply(f'✅ 已开启所有分群关键词开关 (共 {n} 个群变更)\n' + nav)
+
+
+@handler(r'^一键关闭分群$', name='一键关闭分群', desc='关闭所有已记录分群的关键词开关 (超管)', ignore_at_check=True)
+async def bulk_disable_groups(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作')
+        return
+    n = _bulk_set_groups(False)
+    _save()
+    nav = ' '.join([_btn('一键开启分群', '一键开启分群'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply(f'🛑 已关闭所有分群关键词开关 (共 {n} 个群变更)\n' + nav)
+
+
+@handler(r'^禁止分群开启$', name='禁止分群开启', desc='开启禁止分群并关闭所有分群开关 (超管)', ignore_at_check=True)
+async def enable_forbid_group(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作禁止分群')
+        return
+    _data['forbid_group'] = True
+    closed = _bulk_set_groups(False)
+    _save()
+    nav = ' '.join([_btn('禁止分群关闭', '禁止分群关闭'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply(f'🔒 已开启禁止分群\n各群将无法自行开启/新增关键词, 已将 {closed} 个已开启的群全部关闭。\n(全局关键词与超管豁免不受影响)\n' + nav)
+
+
+@handler(r'^禁止分群关闭$', name='禁止分群关闭', desc='解除禁止分群 (超管); 已关闭的群仍默认关闭', ignore_at_check=True)
+async def disable_forbid_group(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作禁止分群')
+        return
+    _data['forbid_group'] = False
+    _save()
+    nav = ' '.join([_btn('禁止分群开启', '禁止分群开启'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply('✅ 已解除禁止分群\n各群可自行开启关键词; 之前已关闭的群仍保持关闭(需手动开启)。\n' + nav)
+
+
 # ==================== 指令: 新增/删除 (本群, 带审核) ====================
 
 
@@ -793,6 +865,9 @@ async def add_group_rule(event, match):
         return
     if not (_is_admin_or_owner(event) or _is_super_admin(event)):
         await event.reply('仅管理员或群主可操作')
+        return
+    if _forbid_group() and not _is_super_admin(event):
+        await event.reply('🔒 超管已开启「禁止分群」, 本群无法新增关键词。如需使用请联系超管。')
         return
     body = _strip_cmd(event.content, r'^新增关键词\s*')
     keyword, reply = _split_kw_reply(body)
@@ -1091,6 +1166,8 @@ async def menu(event, match):
         '【开关】',
         '· 关键词开启 / 关键词关闭：开关本群 (群主/管理)',
         '· 关键词全局开启 / 关键词全局关闭：开关全局 (超管)',
+        '· 一键开启分群 / 一键关闭分群：批量开关所有分群 (超管)',
+        '· 禁止分群开启 / 禁止分群关闭：开启后各群不能自行开启/新增且全部关闭, 超管豁免 (超管)',
         '',
         '【新增/删除】',
         f'· 新增关键词 <词> <回复内容>：群主/管理提交需超管审核 (本群上限 {_GROUP_LIMIT}); 超管直接生效',
@@ -1110,6 +1187,9 @@ async def menu(event, match):
     btns = [_btn('关键词开启', '关键词开启'), _btn('新增关键词', '新增关键词', enter=False), _btn('关键词列表', '关键词列表')]
     if is_super:
         btns.append(_btn('待审核', '待审核'))
+        btns.append(_btn('一键关闭分群', '一键关闭分群'))
+        forbid_cmd = '禁止分群关闭' if _forbid_group() else '禁止分群开启'
+        btns.append(_btn(forbid_cmd, forbid_cmd))
     await event.reply('\n'.join(lines) + '\n' + ' '.join(btns))
 
 
@@ -1133,6 +1213,7 @@ async def api_state(request):
         'success': True,
         'config': {
             'global_enabled': _data.get('global_enabled', True),
+            'forbid_group': _data.get('forbid_group', False),
             'super_admins': _data.get('super_admins', []),
             'group_enabled': _data.get('group_enabled', {}),
         },
@@ -1146,6 +1227,8 @@ async def api_config(request):
     body = await _body(request)
     if 'global_enabled' in body:
         _data['global_enabled'] = bool(body['global_enabled'])
+    if 'forbid_group' in body:
+        _data['forbid_group'] = bool(body['forbid_group'])
     if isinstance(body.get('super_admins'), list):
         _data['super_admins'] = [str(a).strip() for a in body['super_admins'] if str(a).strip()]
     if isinstance(body.get('group_enabled'), dict):
@@ -1192,6 +1275,41 @@ async def api_delete_rule(request):
     _data['rules'] = [r for r in _data.get('rules', []) if r.get('id') != rid]
     _save()
     return _json({'success': len(_data['rules']) != before})
+
+
+@register_route('POST', f'{_API}/delete_batch')
+async def api_delete_rules(request):
+    body = await _body(request)
+    ids = body.get('ids')
+    if not isinstance(ids, list) or not ids:
+        return _json({'success': False, 'message': '缺少 ids'}, status=400)
+    idset = {str(i) for i in ids}
+    before = len(_data.get('rules', []))
+    _data['rules'] = [r for r in _data.get('rules', []) if str(r.get('id')) not in idset]
+    removed = before - len(_data['rules'])
+    _save()
+    return _json({'success': True, 'removed': removed})
+
+
+@register_route('POST', f'{_API}/bulk_group')
+async def api_bulk_group(request):
+    """一键开启/关闭所有分群开关。body: {enabled: bool}"""
+    body = await _body(request)
+    value = bool(body.get('enabled'))
+    changed = _bulk_set_groups(value)
+    _save()
+    return _json({'success': True, 'changed': changed, 'group_enabled': _data.get('group_enabled', {})})
+
+
+@register_route('POST', f'{_API}/forbid_group')
+async def api_forbid_group(request):
+    """禁止分群开关。body: {enabled: bool}; 开启时同时关闭所有分群。"""
+    body = await _body(request)
+    value = bool(body.get('enabled'))
+    _data['forbid_group'] = value
+    changed = _bulk_set_groups(False) if value else 0
+    _save()
+    return _json({'success': True, 'forbid_group': value, 'closed': changed, 'group_enabled': _data.get('group_enabled', {})})
 
 
 @register_route('POST', f'{_API}/toggle')
