@@ -33,7 +33,7 @@ from core.base.logger import PLUGIN, get_logger, report_error
 from core.message._http import MessageType
 from core.message.keyboard import convert_simple_ark_data
 from core.message.media import upload_media_bytes
-from core.plugin.decorators import handler, on_load, on_unload
+from core.plugin.decorators import handler, interceptor, on_load, on_unload
 from core.plugin.web_pages import register_page, register_route, unregister_page
 
 import aiohttp
@@ -801,20 +801,27 @@ def _cancel_existing_schedulers():
 # ==================== 全量消息分发 handler (自动回复) ====================
 
 
-@handler(r'[\s\S]*', name='关键词自动回复', desc='根据关键词规则自动回复', priority=-9999, ignore_at_check=True)
-async def autoreply_dispatcher(event, match):
+@interceptor(priority=-100)
+async def autoreply_interceptor(event):
+    """拦截器: 在所有 handler 之前匹配关键词规则并回复。
+
+    使用拦截器而非低优先级 handler, 确保关键词匹配不会被其他插件的
+    handler (如匹配纯数字内容的 handler) 提前拦截。
+    返回 True 表示已消费事件, None 表示放行给后续 handler 处理。
+    """
     if getattr(event, 'is_bot', False):
-        return
+        return None
     content = getattr(event, 'content', '') or ''
     if not content.strip():
-        return
+        return None
     if _is_mgmt_command(content):
-        return
+        return None
     gid = str(getattr(event, 'group_id', '') or '')
     rule = _find_rule(content, gid)
     if not rule:
-        return
+        return None
     await _send_rule_reply(event, rule, content)
+    return True
 
 
 # ==================== 指令: 开关 ====================
