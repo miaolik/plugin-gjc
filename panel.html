@@ -127,7 +127,7 @@
           <th style="width:70px">匹配</th>
           <th style="width:80px">输出</th>
           <th style="width:90px">作用域</th>
-          <th style="width:60px">定时</th>
+          <th style="width:90px">标签</th>
           <th style="width:96px">操作</th>
         </tr></thead>
         <tbody id="rules-body"></tbody>
@@ -178,6 +178,21 @@
         <label>拒绝通知</label>
         <div class="switch" id="sw-reject" onclick="toggleReject()"><span class="knob"></span><span id="sw-reject-text">关闭</span></div>
         <div class="hint">开启后, 审核「拒绝」会通知提交群该关键词被驳回。</div>
+      </div>
+      <div class="row">
+        <label>撤回发送者</label>
+        <div class="switch" id="sw-recall-sender" onclick="toggleRecallSender()"><span class="knob"></span><span id="sw-recall-sender-text">关闭</span></div>
+        <div class="hint">总开关: 触发关键词后撤回发送者的原始消息 (规则需同时勾选「撤回发送者」)。</div>
+      </div>
+      <div class="row">
+        <label>撤回机器人回复</label>
+        <div class="switch" id="sw-recall-bot" onclick="toggleRecallBot()"><span class="knob"></span><span id="sw-recall-bot-text">关闭</span></div>
+        <div class="hint">总开关: 机器人发送回复后延迟一段时间自动撤回 (规则需同时勾选「撤回机器人」)。</div>
+      </div>
+      <div class="row">
+        <label>撤回延迟 (秒)</label>
+        <input type="number" id="cfg-recall-delay" value="120" min="1" style="max-width:160px">
+        <div class="hint">机器人回复后多少秒自动撤回, 默认 120 秒 (2 分钟)。</div>
       </div>
       <div class="row" style="display:block">
         <label style="display:block;margin-bottom:8px">超级管理员 openid</label>
@@ -372,6 +387,8 @@
 
       <div class="check-row">
         <label><input type="checkbox" id="f-enabled" checked> 启用此规则</label>
+        <label><input type="checkbox" id="f-recall-sender"> 撤回发送者消息</label>
+        <label><input type="checkbox" id="f-recall-bot"> 撤回机器人回复</label>
       </div>
       <div class="modal-footer">
         <button class="ghost" onclick="closeEditor()">取消</button>
@@ -449,7 +466,7 @@ function renderRules(){
       <td><span class="pill">${MODE_LABEL[r.match_mode]||r.match_mode}</span></td>
       <td><span class="pill type">${TYPE_LABEL[r.reply_type]||r.reply_type}</span></td>
       <td>${scope}</td>
-      <td>${r.cron_enabled?'<span class="pill cron">⏰</span>':''}</td>
+      <td>${r.cron_enabled?'<span class="pill cron">⏰</span>':''}${(r.recall_sender||r.recall_bot)?'<span class="pill" style="background:rgba(220,38,38,.12);color:var(--err)">🔄撤回</span>':''}</td>
       <td><div class="row-actions">
         <button class="icon-btn" title="编辑" onclick='openEditor(${JSON.stringify(r)})'>✎</button>
         <button class="icon-btn del" title="删除" onclick="delRule('${r.id}')">🗑</button>
@@ -504,6 +521,11 @@ function renderCfg(){
   $('sw-forbid').classList.toggle('on', fb); $('sw-forbid-text').textContent= fb?'开启':'关闭';
   const rj=CONFIG.notify_reject!==false;
   $('sw-reject').classList.toggle('on', rj); $('sw-reject-text').textContent= rj?'开启':'关闭';
+  const rs=!!CONFIG.recall_sender_enabled;
+  $('sw-recall-sender').classList.toggle('on', rs); $('sw-recall-sender-text').textContent= rs?'开启':'关闭';
+  const rb=!!CONFIG.recall_bot_enabled;
+  $('sw-recall-bot').classList.toggle('on', rb); $('sw-recall-bot-text').textContent= rb?'开启':'关闭';
+  $('cfg-recall-delay').value = CONFIG.recall_bot_delay||120;
   const sl=$('sa-list'); sl.innerHTML='';
   (CONFIG.super_admins||[]).forEach((a,i)=>{
     const t=document.createElement('span'); t.className='tag';
@@ -522,6 +544,8 @@ function renderCfg(){
 
 function toggleGlobal(){ CONFIG.global_enabled=!CONFIG.global_enabled; renderCfg(); }
 function toggleReject(){ CONFIG.notify_reject=(CONFIG.notify_reject===false); renderCfg(); }
+function toggleRecallSender(){ CONFIG.recall_sender_enabled=!CONFIG.recall_sender_enabled; renderCfg(); }
+function toggleRecallBot(){ CONFIG.recall_bot_enabled=!CONFIG.recall_bot_enabled; renderCfg(); }
 function toggleGroup(g){ CONFIG.group_enabled[g]=!CONFIG.group_enabled[g]; renderCfg(); }
 async function toggleForbid(){
   const next=!CONFIG.forbid_group;
@@ -543,7 +567,8 @@ $('sa-input')&&($('sa-input').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefau
 function rmSuperAdmin(i){ CONFIG.super_admins.splice(i,1); renderCfg(); }
 
 async function saveConfig(){
-  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, notify_reject:CONFIG.notify_reject, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
+  CONFIG.recall_bot_delay = Math.max(1, parseInt($('cfg-recall-delay').value)||120);
+  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, notify_reject:CONFIG.notify_reject, recall_sender_enabled:CONFIG.recall_sender_enabled, recall_bot_enabled:CONFIG.recall_bot_enabled, recall_bot_delay:CONFIG.recall_bot_delay, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
   if(r.success){ toast('已保存'); loadState(); } else toast('保存失败');
 }
 
@@ -645,6 +670,8 @@ function openEditor(rule){
   $('f-cron-expr').value=r?(r.cron_expr||''):'';
   $('f-cron-groups').value=r?((r.cron_group_ids||[]).join(', ')):'';
   $('f-enabled').checked=r?!!r.enabled:true;
+  $('f-recall-sender').checked=r?!!r.recall_sender:false;
+  $('f-recall-bot').checked=r?!!r.recall_bot:false;
   onScopeChange(); onCronChange(); onTypeChange();
   $('editor-mask').classList.add('show');
 }
@@ -664,6 +691,8 @@ async function saveRule(){
     keyboard_id: $('f-keyboard-id').value.trim(),
     priority: parseInt($('f-priority').value)||0,
     enabled: $('f-enabled').checked,
+    recall_sender: $('f-recall-sender').checked,
+    recall_bot: $('f-recall-bot').checked,
     cron_enabled: $('f-cron-enabled').checked,
     cron_expr: $('f-cron-expr').value.trim(),
     cron_group_ids: $('f-cron-groups').value,

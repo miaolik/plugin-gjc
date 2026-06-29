@@ -33,6 +33,7 @@ from core.base.logger import PLUGIN, get_logger, report_error
 from core.message._http import MessageType
 from core.message.keyboard import convert_simple_ark_data
 from core.message.media import upload_media_bytes
+from core.message.response import extract_message_id
 from core.plugin.decorators import handler, interceptor, on_load, on_unload
 from core.plugin.web_pages import register_page, register_route, unregister_page
 
@@ -96,6 +97,7 @@ _DEFAULT_HEADERS_UA = (
 #   id, name, keyword, match_mode, scope("global"|"group"), group_id,
 #   reply_type, reply, image_text, ark_type, markdown_template, keyboard_id,
 #   priority, enabled,
+#   recall_sender, recall_bot,              # 撤回开关 (每条规则)
 #   cron_enabled, cron_expr, cron_group_ids,
 #   created_at, updated_at
 # }
@@ -107,6 +109,9 @@ def _default_data() -> dict:
         'global_enabled': True,
         'forbid_group': False,
         'notify_reject': True,
+        'recall_sender_enabled': False,
+        'recall_bot_enabled': False,
+        'recall_bot_delay': 120,
         'super_admins': list(_DEFAULT_SUPER_ADMINS),
         'group_enabled': {},
         'rules': [],
@@ -141,6 +146,8 @@ def _sanitize_rule(r: dict) -> dict:
     except (TypeError, ValueError):
         d['priority'] = 0
     d['enabled'] = bool(r.get('enabled', True))
+    d['recall_sender'] = bool(r.get('recall_sender', False))
+    d['recall_bot'] = bool(r.get('recall_bot', False))
     d['cron_enabled'] = bool(r.get('cron_enabled', False))
     d['cron_expr'] = str(r.get('cron_expr', '')).strip()
     d['cron_group_ids'] = _normalize_group_ids(r.get('cron_group_ids', []))
@@ -159,6 +166,15 @@ def _normalize(raw) -> dict:
         d['forbid_group'] = bool(raw.get('forbid_group'))
     if 'notify_reject' in raw:
         d['notify_reject'] = bool(raw.get('notify_reject'))
+    if 'recall_sender_enabled' in raw:
+        d['recall_sender_enabled'] = bool(raw.get('recall_sender_enabled'))
+    if 'recall_bot_enabled' in raw:
+        d['recall_bot_enabled'] = bool(raw.get('recall_bot_enabled'))
+    if 'recall_bot_delay' in raw:
+        try:
+            d['recall_bot_delay'] = max(1, int(raw['recall_bot_delay']))
+        except (TypeError, ValueError):
+            pass
     if isinstance(raw.get('super_admins'), list) and raw['super_admins']:
         d['super_admins'] = [str(a) for a in raw['super_admins'] if str(a).strip()]
     if isinstance(raw.get('group_enabled'), dict):
@@ -251,7 +267,7 @@ _MGMT_PREFIXES = (
     '禁止分群开启', '禁止分群关闭',
     '拒绝通知开启', '拒绝通知关闭',
     '新增全局关键词', '删除全局关键词',
-    '新增关键词', '删除关键词',
+    '新增撤回关键词', '新增关键词', '删除关键词',
     '待审核', '通过', '拒绝',
     '一键通过', '一键拒绝',
 )
@@ -495,29 +511,32 @@ def _normalize_md(text):
 
 
 async def _send_rule_reply(event, rule, content=''):
+    """发送规则回复, 返回 API 响应 (用于获取 bot 消息 ID 做撤回)。"""
     reply_type = rule.get('reply_type', 'text')
     variables = _build_vars(rule, content, event)
     data = _apply_vars(rule.get('reply', ''), variables)
     image_text = _apply_vars(rule.get('image_text', ''), variables)
+    resp = None
     try:
         if reply_type == 'text':
-            await event.reply(str(data), msg_type=MessageType.MSG_TYPE_TEXT)
+            resp = await event.reply(str(data), msg_type=MessageType.MSG_TYPE_TEXT)
         elif reply_type == 'markdown':
-            await event.reply(_normalize_md(data), msg_type=MessageType.MSG_TYPE_MARKDOWN)
+            resp = await event.reply(_normalize_md(data), msg_type=MessageType.MSG_TYPE_MARKDOWN)
         elif reply_type == 'template_markdown':
-            await _reply_template_markdown(event, rule, data)
+            resp = await _reply_template_markdown(event, rule, data)
         elif reply_type == 'image':
-            await event.reply_image(str(data), image_text)
+            resp = await event.reply_image(str(data), image_text)
         elif reply_type == 'voice':
-            await event.reply_voice(str(data))
+            resp = await event.reply_voice(str(data))
         elif reply_type == 'video':
-            await event.reply_video(str(data))
+            resp = await event.reply_video(str(data))
         elif reply_type == 'ark':
-            await event.reply_ark(int(rule.get('ark_type', 23)), _ark_send_data(rule))
+            resp = await event.reply_ark(int(rule.get('ark_type', 23)), _ark_send_data(rule))
         else:
-            await event.reply(str(data))
+            resp = await event.reply(str(data))
     except Exception as e:
         report_error(PLUGIN, '关键词自动回复', e, context={'rule': rule.get('name')})
+    return resp
 
 
 async def _reply_template_markdown(event, rule, data):
@@ -820,8 +839,33 @@ async def autoreply_interceptor(event):
     rule = _find_rule(content, gid)
     if not rule:
         return None
-    await _send_rule_reply(event, rule, content)
+    resp = await _send_rule_reply(event, rule, content)
+    asyncio.create_task(_maybe_recall(event, rule, resp))
     return True
+
+
+async def _maybe_recall(event, rule, reply_resp):
+    """根据全局开关 + 规则开关, 撤回发送者消息和/或机器人回复。"""
+    try:
+        sender = getattr(event, 'sender', None) or _get_sender()
+        if not sender:
+            return
+        if rule.get('recall_sender') and _data.get('recall_sender_enabled'):
+            try:
+                await sender.recall(event)
+            except Exception as e:
+                log.warning(f'撤回发送者消息失败: {e}')
+        if rule.get('recall_bot') and _data.get('recall_bot_enabled') and reply_resp:
+            bot_msg_id = extract_message_id(reply_resp) if isinstance(reply_resp, dict) else ''
+            if bot_msg_id:
+                delay = max(1, int(_data.get('recall_bot_delay', 120)))
+                await asyncio.sleep(delay)
+                try:
+                    await sender.recall(event, bot_msg_id)
+                except Exception as e:
+                    log.warning(f'撤回机器人回复失败: {e}')
+    except Exception as e:
+        log.warning(f'撤回处理异常: {e}')
 
 
 # ==================== 指令: 开关 ====================
@@ -1039,6 +1083,72 @@ async def add_group_rule(event, match):
     await event.reply(f'📩 已提交审核 (序号 {seq})\n关键词「{keyword}」需超级管理员通过后才会生效。{tip}\n' + nav)
 
 
+@handler(r'^新增撤回关键词', name='新增撤回关键词', desc='新增撤回关键词 <词> <回复内容> (触发后撤回发送者+定时撤回机器人回复)', group_only=True, ignore_at_check=True)
+async def add_recall_rule(event, match):
+    if not _is_full_access(event):
+        await event.reply('仅限全量群使用')
+        return
+    if not (_is_admin_or_owner(event) or _is_super_admin(event)):
+        await event.reply('仅管理员或群主可操作')
+        return
+    if _forbid_group() and not _is_super_admin(event):
+        await event.reply('🔒 超管已开启「禁止分群」, 本群无法新增关键词。如需使用请联系超管。')
+        return
+    body = _strip_cmd(event.content, r'^新增撤回关键词\s*')
+    keyword, reply = _split_kw_reply(body)
+    if not keyword or not reply:
+        await event.reply('用法: 新增撤回关键词 <关键词> <回复内容>\n触发后撤回发送者消息, 定时撤回机器人回复\n' + _btn('新增撤回关键词', '新增撤回关键词', enter=False))
+        return
+    gid = str(event.group_id)
+
+    if _is_super_admin(event):
+        rule = _sanitize_rule({
+            'name': keyword, 'keyword': keyword, 'match_mode': 'fuzzy',
+            'scope': 'group', 'group_id': gid, 'reply_type': 'text', 'reply': reply,
+            'recall_sender': True, 'recall_bot': True,
+        })
+        _data.setdefault('rules', []).append(rule)
+        _save()
+        nav = ' '.join([_btn('新增撤回关键词', '新增撤回关键词', enter=False), _btn('关键词列表', '关键词列表'), _btn('关键词菜单', '关键词菜单')])
+        await event.reply(f'✅ 已新增本群撤回关键词「{keyword}」(超管直接生效)\n触发后将撤回发送者消息 + {_data.get("recall_bot_delay", 120)}秒后撤回机器人回复\n' + nav)
+        return
+
+    existing = len(_group_rules(gid))
+    pending_same = sum(1 for p in _data.get('pending', []) if str(p.get('group_id')) == gid)
+    if existing + pending_same >= _GROUP_LIMIT:
+        await event.reply(f'❌ 本群关键词已达上限 {_GROUP_LIMIT} 个 (含待审核)，无法再提交。')
+        return
+    if pending_same >= _MAX_PENDING_PER_GROUP:
+        await event.reply(f'❌ 本群当前有 {pending_same} 条待审核, 最多 {_MAX_PENDING_PER_GROUP} 条。\n请等前面的审核完成后再提交新的。')
+        return
+
+    _data['pending_seq'] = int(_data.get('pending_seq', 0)) + 1
+    seq = _data['pending_seq']
+    pending = {
+        'id': 'pend_' + uuid.uuid4().hex[:12],
+        'seq': seq,
+        'group_id': gid,
+        'group_openid': str(getattr(event, 'group_openid', '') or gid),
+        'submitter': str(event.user_id),
+        'submitter_name': str(getattr(event, 'username', '') or event.user_id),
+        'keyword': keyword,
+        'reply': reply,
+        'recall_sender': True,
+        'recall_bot': True,
+        'created_at': datetime.datetime.now().isoformat(timespec='seconds'),
+    }
+    _data.setdefault('pending', []).append(pending)
+    _save()
+
+    await _notify_super_admins_pending(event, pending)
+
+    nav = ' '.join([_btn('新增撤回关键词', '新增撤回关键词', enter=False), _btn('关键词菜单', '关键词菜单')])
+    tip = ''
+    if not _group_enabled(gid):
+        tip = '\n⚠️ 本群关键词功能尚未开启, 请先发「关键词开启」, 否则审核通过后关键词也不会生效。'
+    await event.reply(f'📩 已提交审核 (序号 {seq})\n撤回关键词「{keyword}」需超级管理员通过后才会生效。{tip}\n' + nav)
+
+
 async def _notify_super_admins_pending(event, pending):
     """私信主动消息通知所有超管有新的待审核请求。"""
     sender = getattr(event, 'sender', None) or _get_sender()
@@ -1183,6 +1293,7 @@ async def approve_pending(event, match):
         rule = _sanitize_rule({
             'name': p.get('keyword'), 'keyword': p.get('keyword'), 'match_mode': 'fuzzy',
             'scope': 'group', 'group_id': p.get('group_id'), 'reply_type': 'text', 'reply': p.get('reply'),
+            'recall_sender': p.get('recall_sender', False), 'recall_bot': p.get('recall_bot', False),
         })
         _data.setdefault('rules', []).append(rule)
         approved.append(s)
@@ -1220,6 +1331,7 @@ async def approve_all_pending(event, match):
         rule = _sanitize_rule({
             'name': p.get('keyword'), 'keyword': p.get('keyword'), 'match_mode': 'fuzzy',
             'scope': 'group', 'group_id': p.get('group_id'), 'reply_type': 'text', 'reply': p.get('reply'),
+            'recall_sender': p.get('recall_sender', False), 'recall_bot': p.get('recall_bot', False),
         })
         _data.setdefault('rules', []).append(rule)
         approved.append(int(p.get('seq')))
@@ -1364,6 +1476,7 @@ async def menu(event, match):
         '',
         '【新增/删除】',
         f'· 新增关键词 <词> <回复内容>：群主/管理提交需超管审核 (本群上限 {_GROUP_LIMIT}, 每群最多 {_MAX_PENDING_PER_GROUP} 条在审); 超管直接生效',
+        '· 新增撤回关键词 <词> <内容>：同上, 但触发后撤回发送者消息+定时撤回机器人回复',
         '· 删除关键词 <词>：删除本群词',
         '· 新增全局关键词 <词> <内容> / 删除全局关键词 <词>：超管',
         '',
@@ -1380,7 +1493,7 @@ async def menu(event, match):
         '',
         '提示：多种输出方式(图片/语音/视频/markdown/ark)与定时推送(cron)可在 Web 后台「关键词自动回复」面板配置。',
     ]
-    btns = [_btn('关键词开启', '关键词开启'), _btn('新增关键词', '新增关键词', enter=False), _btn('关键词列表', '关键词列表')]
+    btns = [_btn('关键词开启', '关键词开启'), _btn('新增关键词', '新增关键词', enter=False), _btn('新增撤回关键词', '新增撤回关键词', enter=False), _btn('关键词列表', '关键词列表')]
     if is_super:
         btns.append(_btn('待审核', '待审核'))
         btns.append(_btn('一键通过', '一键通过'))
@@ -1429,6 +1542,9 @@ async def api_state(request):
             'global_enabled': _data.get('global_enabled', True),
             'forbid_group': _data.get('forbid_group', False),
             'notify_reject': _data.get('notify_reject', True),
+            'recall_sender_enabled': _data.get('recall_sender_enabled', False),
+            'recall_bot_enabled': _data.get('recall_bot_enabled', False),
+            'recall_bot_delay': _data.get('recall_bot_delay', 120),
             'super_admins': _data.get('super_admins', []),
             'group_enabled': _data.get('group_enabled', {}),
         },
@@ -1446,6 +1562,15 @@ async def api_config(request):
         _data['forbid_group'] = bool(body['forbid_group'])
     if 'notify_reject' in body:
         _data['notify_reject'] = bool(body['notify_reject'])
+    if 'recall_sender_enabled' in body:
+        _data['recall_sender_enabled'] = bool(body['recall_sender_enabled'])
+    if 'recall_bot_enabled' in body:
+        _data['recall_bot_enabled'] = bool(body['recall_bot_enabled'])
+    if 'recall_bot_delay' in body:
+        try:
+            _data['recall_bot_delay'] = max(1, int(body['recall_bot_delay']))
+        except (TypeError, ValueError):
+            pass
     if isinstance(body.get('super_admins'), list):
         _data['super_admins'] = [str(a).strip() for a in body['super_admins'] if str(a).strip()]
     if isinstance(body.get('group_enabled'), dict):
@@ -1562,6 +1687,7 @@ async def api_approve(request):
         rule = _sanitize_rule({
             'name': p.get('keyword'), 'keyword': p.get('keyword'), 'match_mode': 'fuzzy',
             'scope': 'group', 'group_id': p.get('group_id'), 'reply_type': 'text', 'reply': p.get('reply'),
+            'recall_sender': p.get('recall_sender', False), 'recall_bot': p.get('recall_bot', False),
         })
         _data.setdefault('rules', []).append(rule)
         approved.append(s)
@@ -1600,6 +1726,7 @@ async def api_approve_all(request):
         rule = _sanitize_rule({
             'name': p.get('keyword'), 'keyword': p.get('keyword'), 'match_mode': 'fuzzy',
             'scope': 'group', 'group_id': p.get('group_id'), 'reply_type': 'text', 'reply': p.get('reply'),
+            'recall_sender': p.get('recall_sender', False), 'recall_bot': p.get('recall_bot', False),
         })
         _data.setdefault('rules', []).append(rule)
         approved.append(int(p.get('seq')))
