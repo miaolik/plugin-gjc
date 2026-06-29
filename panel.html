@@ -143,8 +143,10 @@
   <div id="tab-pending" class="hidden">
     <div class="card">
       <div class="toolbar">
+        <button class="ok" onclick="approveAll()">✅ 一键通过</button>
+        <button class="danger" onclick="rejectAll()">❌ 一键拒绝</button>
         <button class="ghost" onclick="loadState()">↻ 刷新</button>
-        <span class="stat">群主/管理通过指令「新增关键词」提交的待审核项</span>
+        <span class="stat">群主/管理通过指令「新增关键词」提交的待审核项 (每群最多 3 条在审)</span>
       </div>
       <div id="pending-body"></div>
       <div id="pending-empty" class="empty hidden"><div class="big">✅</div><div>当前没有待审核项</div></div>
@@ -561,6 +563,18 @@ async function approve(seq){
 async function reject(seq){
   const r=await api('/reject','POST',{seqs:[seq]});
   if(r.success){ toast('已拒绝'); loadState(); } else toast('操作失败');
+}
+async function approveAll(){
+  if(PENDING.length===0){ toast('没有待审核项'); return; }
+  if(!confirm(`确认一键通过所有 ${PENDING.length} 条待审核?`)) return;
+  const r=await api('/approve_all','POST',{});
+  if(r.success){ toast(`已通过 ${(r.approved||[]).length} 条`); loadState(); } else toast('操作失败');
+}
+async function rejectAll(){
+  if(PENDING.length===0){ toast('没有待审核项'); return; }
+  if(!confirm(`确认一键拒绝所有 ${PENDING.length} 条待审核?`)) return;
+  const r=await api('/reject_all','POST',{});
+  if(r.success){ toast(`已拒绝 ${(r.rejected||[]).length} 条`); loadState(); } else toast('操作失败');
 }
 
 // ===== editor =====
