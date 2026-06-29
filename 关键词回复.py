@@ -121,7 +121,7 @@ def _sanitize_rule(r: dict) -> dict:
     d = {}
     d['id'] = str(r.get('id') or ('rule_' + uuid.uuid4().hex[:12]))
     d['name'] = str(r.get('name', '')).strip()[:60] or '未命名'
-    d['keyword'] = str(r.get('keyword', ''))
+    d['keyword'] = str(r.get('keyword', '')).strip()
     d['match_mode'] = r.get('match_mode') if r.get('match_mode') in MATCH_MODES else 'fuzzy'
     scope = r.get('scope')
     d['scope'] = scope if scope in ('global', 'group') else 'global'
@@ -270,9 +270,10 @@ def _strip_cmd(content: str, prefix_re: str) -> str:
 
 def _rule_match(rule, content) -> bool:
     mode = rule.get('match_mode', 'fuzzy')
-    kw = rule.get('keyword', '')
+    kw = rule.get('keyword', '').strip()
     if not kw:
         return False
+    content = (content or '').strip()
     if mode == 'exact':
         return content == kw
     if mode == 'fuzzy':
@@ -287,6 +288,7 @@ def _rule_match(rule, content) -> bool:
 
 def _find_rule(content: str, gid: str):
     """返回命中的最高优先级规则 (全局受全局开关, 本群受本群开关控制)。"""
+    content = (content or '').strip()
     if not content:
         return None
     candidates = []
@@ -1024,7 +1026,10 @@ async def add_group_rule(event, match):
     await _notify_super_admins_pending(event, pending)
 
     nav = ' '.join([_btn('新增关键词', '新增关键词', enter=False), _btn('关键词菜单', '关键词菜单')])
-    await event.reply(f'📩 已提交审核 (序号 {seq})\n关键词「{keyword}」需超级管理员通过后才会生效。\n' + nav)
+    tip = ''
+    if not _group_enabled(gid):
+        tip = '\n⚠️ 本群关键词功能尚未开启, 请先发「关键词开启」, 否则审核通过后关键词也不会生效。'
+    await event.reply(f'📩 已提交审核 (序号 {seq})\n关键词「{keyword}」需超级管理员通过后才会生效。{tip}\n' + nav)
 
 
 async def _notify_super_admins_pending(event, pending):
@@ -1393,6 +1398,22 @@ async def _body(request):
         return {}
 
 
+async def _api_notify_groups(items, approved=True):
+    """Web API 审核后异步通知各提交群。"""
+    sender = _get_sender()
+    if not sender:
+        return
+    for p in items:
+        try:
+            target = p.get('group_openid') or p.get('group_id')
+            if approved:
+                await sender.send_to_group(target, f'✅ 关键词「{p.get("keyword")}」已通过审核并生效')
+            elif _data.get('notify_reject', True):
+                await sender.send_to_group(target, f'🛑 关键词「{p.get("keyword")}」未通过审核，已被超管拒绝。')
+        except Exception as e:
+            log.warning(f'通知群 {p.get("group_id")} 审核结果失败: {e}')
+
+
 @register_route('GET', f'{_API}/state')
 async def api_state(request):
     return _json({
@@ -1526,6 +1547,7 @@ async def api_approve(request):
     pend = _data.get('pending', [])
     by_seq = {int(p.get('seq')): p for p in pend}
     approved = []
+    notify = []
     for s in seqs:
         p = by_seq.get(s)
         if not p:
@@ -1536,8 +1558,10 @@ async def api_approve(request):
         })
         _data.setdefault('rules', []).append(rule)
         approved.append(s)
+        notify.append(p)
     _data['pending'] = [p for p in pend if int(p.get('seq')) not in approved]
     _save()
+    asyncio.create_task(_api_notify_groups(notify, approved=True))
     return _json({'success': True, 'approved': approved})
 
 
@@ -1550,9 +1574,11 @@ async def api_reject(request):
     except (TypeError, ValueError):
         return _json({'success': False, 'message': '序号无效'}, status=400)
     pend = _data.get('pending', [])
-    rejected = [int(p.get('seq')) for p in pend if int(p.get('seq')) in seqs]
+    notify = [p for p in pend if int(p.get('seq')) in seqs]
+    rejected = [int(p.get('seq')) for p in notify]
     _data['pending'] = [p for p in pend if int(p.get('seq')) not in rejected]
     _save()
+    asyncio.create_task(_api_notify_groups(notify, approved=False))
     return _json({'success': True, 'rejected': rejected})
 
 
@@ -1562,6 +1588,7 @@ async def api_approve_all(request):
     if not pend:
         return _json({'success': True, 'approved': []})
     approved = []
+    notify = list(pend)
     for p in pend:
         rule = _sanitize_rule({
             'name': p.get('keyword'), 'keyword': p.get('keyword'), 'match_mode': 'fuzzy',
@@ -1571,6 +1598,7 @@ async def api_approve_all(request):
         approved.append(int(p.get('seq')))
     _data['pending'] = []
     _save()
+    asyncio.create_task(_api_notify_groups(notify, approved=True))
     return _json({'success': True, 'approved': approved})
 
 
@@ -1579,9 +1607,11 @@ async def api_reject_all(request):
     pend = _data.get('pending', [])
     if not pend:
         return _json({'success': True, 'rejected': []})
+    notify = list(pend)
     rejected = [int(p.get('seq')) for p in pend]
     _data['pending'] = []
     _save()
+    asyncio.create_task(_api_notify_groups(notify, approved=False))
     return _json({'success': True, 'rejected': rejected})
 
 
