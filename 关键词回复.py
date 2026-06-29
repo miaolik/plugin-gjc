@@ -61,6 +61,9 @@ _DEFAULT_SUPER_ADMINS = ['538389445D765D2988BFE31506C54799']
 # 群主/管理添加本群关键词数量上限 (超管不受限)
 _GROUP_LIMIT = 50
 
+# 每个分群最多同时在审核中的条数 (超过则拒绝新提交, 等前面审完才能再提交)
+_MAX_PENDING_PER_GROUP = 3
+
 MATCH_MODES = ('exact', 'fuzzy', 'regex')
 REPLY_TYPES = ('text', 'markdown', 'template_markdown', 'image', 'voice', 'video', 'ark')
 
@@ -250,6 +253,7 @@ _MGMT_PREFIXES = (
     '新增全局关键词', '删除全局关键词',
     '新增关键词', '删除关键词',
     '待审核', '通过', '拒绝',
+    '一键通过', '一键拒绝',
 )
 
 
@@ -997,6 +1001,9 @@ async def add_group_rule(event, match):
     if existing + pending_same >= _GROUP_LIMIT:
         await event.reply(f'❌ 本群关键词已达上限 {_GROUP_LIMIT} 个 (含待审核)，无法再提交。')
         return
+    if pending_same >= _MAX_PENDING_PER_GROUP:
+        await event.reply(f'❌ 本群当前有 {pending_same} 条待审核, 最多 {_MAX_PENDING_PER_GROUP} 条。\n请等前面的审核完成后再提交新的。')
+        return
 
     _data['pending_seq'] = int(_data.get('pending_seq', 0)) + 1
     seq = _data['pending_seq']
@@ -1027,6 +1034,7 @@ async def _notify_super_admins_pending(event, pending):
         log.warning('无可用 sender, 无法私信通知超管待审核')
         return
     btn = ' '.join([_btn(f'通过 {pending["seq"]}', f'通过 {pending["seq"]}'), _btn(f'拒绝 {pending["seq"]}', f'拒绝 {pending["seq"]}')])
+    batch_btn = ' '.join([_btn('一键通过', '一键通过'), _btn('一键拒绝', '一键拒绝')])
     text = (
         '📩 关键词新增待审核\n'
         f'序号: {pending["seq"]}\n'
@@ -1037,7 +1045,7 @@ async def _notify_super_admins_pending(event, pending):
         '———\n'
         '通过: 通过 序号 (可多个, 如 通过 1 2)\n'
         '拒绝: 拒绝 序号\n'
-        + btn
+        + btn + '\n' + batch_btn
     )
     for admin in _data.get('super_admins', []):
         try:
@@ -1138,7 +1146,8 @@ async def list_pending(event, match):
     for p in pend[:20]:
         pair = ' '.join([_btn(f'通过 {p["seq"]}', f'通过 {p["seq"]}'), _btn(f'拒绝 {p["seq"]}', f'拒绝 {p["seq"]}')])
         lines.append(f'序号 {p["seq"]}: {pair}')
-    lines.append('\n' + _btn('关键词菜单', '关键词菜单'))
+    batch_btns = ' '.join([_btn('一键通过', '一键通过'), _btn('一键拒绝', '一键拒绝')])
+    lines.append('\n' + batch_btns + ' ' + _btn('关键词菜单', '关键词菜单'))
     await event.reply('\n'.join(lines))
 
 
@@ -1182,6 +1191,65 @@ async def approve_pending(event, match):
                 log.warning(f'通知群 {p.get("group_id")} 审核通过失败: {e}')
     nav = ' '.join([_btn('待审核', '待审核'), _btn('关键词列表', '关键词列表')])
     await event.reply(f'✅ 已通过审核序号: {" ".join(str(s) for s in approved)}\n' + nav)
+
+
+@handler(r'^一键通过$', name='一键通过', desc='一键通过所有待审核关键词 (超管)', ignore_at_check=True)
+async def approve_all_pending(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可审核')
+        return
+    pend = _data.get('pending', [])
+    if not pend:
+        await event.reply('✅ 当前没有待审核的关键词')
+        return
+    approved = []
+    notify = []
+    for p in pend:
+        rule = _sanitize_rule({
+            'name': p.get('keyword'), 'keyword': p.get('keyword'), 'match_mode': 'fuzzy',
+            'scope': 'group', 'group_id': p.get('group_id'), 'reply_type': 'text', 'reply': p.get('reply'),
+        })
+        _data.setdefault('rules', []).append(rule)
+        approved.append(int(p.get('seq')))
+        notify.append(p)
+    _data['pending'] = []
+    _save()
+    sender = getattr(event, 'sender', None) or _get_sender()
+    if sender:
+        for p in notify:
+            try:
+                target = p.get('group_openid') or p.get('group_id')
+                await sender.send_to_group(target, f'✅ 关键词「{p.get("keyword")}」已通过审核并生效')
+            except Exception as e:
+                log.warning(f'通知群 {p.get("group_id")} 审核通过失败: {e}')
+    nav = ' '.join([_btn('关键词列表', '关键词列表'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply(f'✅ 已一键通过所有待审核 (共 {len(approved)} 条)\n' + nav)
+
+
+@handler(r'^一键拒绝$', name='一键拒绝', desc='一键拒绝所有待审核关键词 (超管)', ignore_at_check=True)
+async def reject_all_pending(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可审核')
+        return
+    pend = _data.get('pending', [])
+    if not pend:
+        await event.reply('✅ 当前没有待审核的关键词')
+        return
+    rejected = [int(p.get('seq')) for p in pend]
+    notify = list(pend)
+    _data['pending'] = []
+    _save()
+    if _data.get('notify_reject', True):
+        sender = getattr(event, 'sender', None) or _get_sender()
+        if sender:
+            for p in notify:
+                try:
+                    target = p.get('group_openid') or p.get('group_id')
+                    await sender.send_to_group(target, f'🛑 关键词「{p.get("keyword")}」未通过审核，已被超管拒绝。')
+                except Exception as e:
+                    log.warning(f'通知群 {p.get("group_id")} 审核拒绝失败: {e}')
+    nav = ' '.join([_btn('关键词菜单', '关键词菜单')])
+    await event.reply(f'🛑 已一键拒绝所有待审核 (共 {len(rejected)} 条)\n' + nav)
 
 
 @handler(r'^拒绝(\s+\d+)+\s*$', name='拒绝审核', desc='拒绝 序号 [序号...] 审核驳回 (超管)', ignore_at_check=True)
@@ -1283,7 +1351,7 @@ async def menu(event, match):
         '· 禁止分群开启 / 禁止分群关闭：开启后各群不能自行开启/新增且全部关闭, 超管豁免 (超管)',
         '',
         '【新增/删除】',
-        f'· 新增关键词 <词> <回复内容>：群主/管理提交需超管审核 (本群上限 {_GROUP_LIMIT}); 超管直接生效',
+        f'· 新增关键词 <词> <回复内容>：群主/管理提交需超管审核 (本群上限 {_GROUP_LIMIT}, 每群最多 {_MAX_PENDING_PER_GROUP} 条在审); 超管直接生效',
         '· 删除关键词 <词>：删除本群词',
         '· 新增全局关键词 <词> <内容> / 删除全局关键词 <词>：超管',
         '',
@@ -1291,6 +1359,8 @@ async def menu(event, match):
         '· 待审核：查看待审核列表',
         '· 通过 序号 [序号...]：通过 (可多个, 如 通过 1 2)',
         '· 拒绝 序号 [序号...]：驳回',
+        '· 一键通过：通过所有待审核',
+        '· 一键拒绝：拒绝所有待审核',
         '· 拒绝通知开启 / 拒绝通知关闭：是否在拒绝时通知提交群',
         '',
         '【查看】',
@@ -1301,6 +1371,8 @@ async def menu(event, match):
     btns = [_btn('关键词开启', '关键词开启'), _btn('新增关键词', '新增关键词', enter=False), _btn('关键词列表', '关键词列表')]
     if is_super:
         btns.append(_btn('待审核', '待审核'))
+        btns.append(_btn('一键通过', '一键通过'))
+        btns.append(_btn('一键拒绝', '一键拒绝'))
         btns.append(_btn('一键关闭分群', '一键关闭分群'))
         forbid_cmd = '禁止分群关闭' if _forbid_group() else '禁止分群开启'
         btns.append(_btn(forbid_cmd, forbid_cmd))
@@ -1480,6 +1552,35 @@ async def api_reject(request):
     pend = _data.get('pending', [])
     rejected = [int(p.get('seq')) for p in pend if int(p.get('seq')) in seqs]
     _data['pending'] = [p for p in pend if int(p.get('seq')) not in rejected]
+    _save()
+    return _json({'success': True, 'rejected': rejected})
+
+
+@register_route('POST', f'{_API}/approve_all')
+async def api_approve_all(request):
+    pend = _data.get('pending', [])
+    if not pend:
+        return _json({'success': True, 'approved': []})
+    approved = []
+    for p in pend:
+        rule = _sanitize_rule({
+            'name': p.get('keyword'), 'keyword': p.get('keyword'), 'match_mode': 'fuzzy',
+            'scope': 'group', 'group_id': p.get('group_id'), 'reply_type': 'text', 'reply': p.get('reply'),
+        })
+        _data.setdefault('rules', []).append(rule)
+        approved.append(int(p.get('seq')))
+    _data['pending'] = []
+    _save()
+    return _json({'success': True, 'approved': approved})
+
+
+@register_route('POST', f'{_API}/reject_all')
+async def api_reject_all(request):
+    pend = _data.get('pending', [])
+    if not pend:
+        return _json({'success': True, 'rejected': []})
+    rejected = [int(p.get('seq')) for p in pend]
+    _data['pending'] = []
     _save()
     return _json({'success': True, 'rejected': rejected})
 
