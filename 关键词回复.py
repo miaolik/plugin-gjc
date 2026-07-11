@@ -203,11 +203,44 @@ def _load():
     except Exception:
         raw = None
     _data = _normalize(raw)
+    _invalidate_match_cache()
 
 
 def _save():
     with open(_DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(_data, f, ensure_ascii=False, indent=2)
+    _invalidate_match_cache()
+
+
+# ==================== 内存匹配缓存 ====================
+# 规则排序结果与 regex 编译结果常驻内存, 避免每条消息重复排序/编译;
+# 数据变更 (_load/_save) 时整体失效重建。
+_sorted_rules_cache = None   # [(idx, rule), ...] 按优先级降序、同优先级按定义顺序
+_regex_cache: dict = {}      # keyword -> compiled pattern 或 None(非法正则)
+
+
+def _invalidate_match_cache():
+    global _sorted_rules_cache
+    _sorted_rules_cache = None
+    _regex_cache.clear()
+
+
+def _get_sorted_rules():
+    global _sorted_rules_cache
+    if _sorted_rules_cache is None:
+        indexed = list(enumerate(_data.get('rules', [])))
+        indexed.sort(key=lambda x: (-int(x[1].get('priority', 0)), x[0]))
+        _sorted_rules_cache = indexed
+    return _sorted_rules_cache
+
+
+def _compiled_regex(kw: str):
+    if kw not in _regex_cache:
+        try:
+            _regex_cache[kw] = re.compile(kw, re.DOTALL)
+        except re.error:
+            _regex_cache[kw] = None
+    return _regex_cache[kw]
 
 
 # ==================== 工具函数 ====================
@@ -295,10 +328,8 @@ def _rule_match(rule, content) -> bool:
     if mode == 'fuzzy':
         return kw in content
     if mode == 'regex':
-        try:
-            return re.search(kw, content, re.DOTALL) is not None
-        except re.error:
-            return False
+        pat = _compiled_regex(kw)
+        return pat is not None and pat.search(content) is not None
     return False
 
 
@@ -307,21 +338,17 @@ def _find_rule(content: str, gid: str):
     content = (content or '').strip()
     if not content:
         return None
-    candidates = []
-    for idx, r in enumerate(_data.get('rules', [])):
+    glb = _global_enabled()
+    grp = _group_enabled(gid)
+    for _, r in _get_sorted_rules():
         if not r.get('enabled', True):
             continue
         if r.get('scope') == 'global':
-            if not _global_enabled():
+            if not glb:
                 continue
         else:
-            if str(r.get('group_id')) != str(gid):
+            if str(r.get('group_id')) != str(gid) or not grp:
                 continue
-            if not _group_enabled(gid):
-                continue
-        candidates.append((idx, r))
-    candidates.sort(key=lambda x: (-int(x[1].get('priority', 0)), x[0]))
-    for _, r in candidates:
         if _rule_match(r, content):
             return r
     return None
@@ -460,11 +487,8 @@ def _build_vars(rule, content, event):
     # 模糊/完全模式下关键词通常是字面量, {0} 即命中的文本; 含捕获组才有 {1}+)
     kw = rule.get('keyword', '')
     if content and kw:
-        mo = None
-        try:
-            mo = re.search(kw, content, re.DOTALL)
-        except re.error:
-            mo = None
+        pat = _compiled_regex(kw)
+        mo = pat.search(content) if pat is not None else None
         if mo is None:
             # 关键词含正则元字符但本意是字面量时, 退回按字面量定位
             try:
