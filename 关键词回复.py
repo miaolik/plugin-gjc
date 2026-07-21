@@ -112,6 +112,8 @@ def _default_data() -> dict:
         'recall_sender_enabled': False,
         'recall_bot_enabled': False,
         'recall_bot_delay': 120,
+        'bot_binding_enabled': False,
+        'bound_bots': [],
         'super_admins': list(_DEFAULT_SUPER_ADMINS),
         'group_enabled': {},
         'rules': [],
@@ -170,6 +172,10 @@ def _normalize(raw) -> dict:
         d['recall_sender_enabled'] = bool(raw.get('recall_sender_enabled'))
     if 'recall_bot_enabled' in raw:
         d['recall_bot_enabled'] = bool(raw.get('recall_bot_enabled'))
+    if 'bot_binding_enabled' in raw:
+        d['bot_binding_enabled'] = bool(raw.get('bot_binding_enabled'))
+    if isinstance(raw.get('bound_bots'), list):
+        d['bound_bots'] = [str(a).strip() for a in raw['bound_bots'] if str(a).strip()]
     if 'recall_bot_delay' in raw:
         try:
             d['recall_bot_delay'] = max(1, int(raw['recall_bot_delay']))
@@ -730,6 +736,88 @@ def _get_sender(appid=''):
         return None
 
 
+def _get_plugin_manager():
+    try:
+        from core.bot.manager import _bot_manager_ref
+        pm = getattr(_bot_manager_ref, '_plugin_manager', None) or getattr(_bot_manager_ref, 'plugin_manager', None)
+        if pm and hasattr(pm, 'get_plugin_bots'):
+            return pm
+    except Exception as e:
+        log.warning(f'获取插件管理器失败: {e}')
+    return None
+
+
+def _binding_keys():
+    """本插件在框架 plugin_bots 里可能的键: 插件名/文件名 优先, 其次 插件名。"""
+    parts = (__name__ or '').split('.')
+    plugin = parts[1] if len(parts) >= 2 else ''
+    fname = parts[2] if len(parts) >= 3 else ''
+    keys = []
+    if plugin and fname:
+        keys.append(f'{plugin}/{fname}')
+    if plugin:
+        keys.append(plugin)
+    return keys
+
+
+def _bound_bot_appids():
+    """读取框架绑定的 appid 列表; None 表示无绑定记录或不限制。"""
+    pm = _get_plugin_manager()
+    if not pm:
+        return None
+    try:
+        pb = pm.get_plugin_bots()
+    except Exception as e:
+        log.warning(f'读取插件机器人绑定失败: {e}')
+        return None
+    if not pb:
+        return None
+    for key in _binding_keys():
+        bots = pb.get(key)
+        if bots is not None:
+            return [str(b) for b in bots]
+    return None
+
+
+def _allowed_bot_appids():
+    """返回本插件允许的 appid 集合; None 表示不限制。
+
+    优先用插件自己选择的机器人 (Web 面板多选), 其次回退到框架
+    「选择机器人」绑定。框架的绑定只作用于 handler, 拦截器需自行检查。"""
+    own = _data.get('bound_bots') or []
+    if own:
+        return frozenset(str(a) for a in own)
+    bots = _bound_bot_appids()
+    return frozenset(bots) if bots else None
+
+
+def _list_framework_bots():
+    """列出框架已加载的机器人 [{appid, name, qq}]。"""
+    result = []
+    try:
+        from core.bot.manager import _bot_manager_ref
+        bots = getattr(_bot_manager_ref, '_bots', None) or {}
+        for appid, bot in bots.items():
+            result.append({
+                'appid': str(appid),
+                'name': str(getattr(bot, 'name', '') or appid),
+                'qq': str(getattr(bot, 'robot_qq', '') or ''),
+            })
+    except Exception as e:
+        log.warning(f'获取机器人列表失败: {e}')
+    return result
+
+
+def _bot_allowed(event):
+    """「绑定限制」开关开启时, 检查事件的 appid 是否在绑定的机器人内。"""
+    if not _data.get('bot_binding_enabled', False):
+        return True
+    ab = _allowed_bot_appids()
+    if ab is None:
+        return True
+    return str(getattr(event, 'appid', '') or '') in ab
+
+
 # ==================== Cron 解析 ====================
 
 
@@ -802,7 +890,8 @@ async def _run_due_tasks(now):
         group_ids = _normalize_group_ids(rule.get('cron_group_ids', []))
         if not group_ids:
             continue
-        sender = _get_sender()
+        ab = _allowed_bot_appids() if _data.get('bot_binding_enabled', False) else None
+        sender = _get_sender(next(iter(ab)) if ab else '')
         if not sender:
             log.warning('定时推送无可用机器人 (sender 为空), 跳过')
             continue
@@ -853,6 +942,8 @@ async def autoreply_interceptor(event):
     返回 True 表示已消费事件, None 表示放行给后续 handler 处理。
     """
     if getattr(event, 'is_bot', False):
+        return None
+    if not _bot_allowed(event):
         return None
     content = getattr(event, 'content', '') or ''
     if not content.strip():
@@ -1027,6 +1118,28 @@ async def disable_notify_reject(event, match):
     _save()
     nav = ' '.join([_btn('拒绝通知开启', '拒绝通知开启'), _btn('关键词菜单', '关键词菜单')])
     await event.reply('🛑 已关闭「拒绝通知」\n审核拒绝时不再通知提交群。\n' + nav)
+
+
+@handler(r'^绑定限制开启$', name='绑定限制开启', desc='拦截器/定时推送遵守框架「选择机器人」绑定 (超管)', ignore_at_check=True)
+async def enable_bot_binding(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作')
+        return
+    _data['bot_binding_enabled'] = True
+    _save()
+    nav = ' '.join([_btn('绑定限制关闭', '绑定限制关闭'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply('✅ 已开启「绑定限制」\n关键词触发与定时推送将遵守框架「选择机器人」的绑定, 未绑定的机器人不再响应。\n注意: 若绑定的 appid 与实际收消息的机器人不一致, 关键词将全部不触发。\n' + nav)
+
+
+@handler(r'^绑定限制关闭$', name='绑定限制关闭', desc='关闭绑定限制, 拦截器对所有机器人生效 (超管)', ignore_at_check=True)
+async def disable_bot_binding(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作')
+        return
+    _data['bot_binding_enabled'] = False
+    _save()
+    nav = ' '.join([_btn('绑定限制开启', '绑定限制开启'), _btn('关键词菜单', '关键词菜单')])
+    await event.reply('🛑 已关闭「绑定限制」\n关键词触发不再受框架「选择机器人」绑定影响, 所有机器人均可触发。\n' + nav)
 
 
 # ==================== 指令: 新增/删除 (本群, 带审核) ====================
@@ -1497,6 +1610,7 @@ async def menu(event, match):
         '· 关键词全局开启 / 关键词全局关闭：开关全局 (超管)',
         '· 一键开启分群 / 一键关闭分群：批量开关所有分群 (超管)',
         '· 禁止分群开启 / 禁止分群关闭：开启后各群不能自行开启/新增且全部关闭, 超管豁免 (超管)',
+        '· 绑定限制开启 / 绑定限制关闭：是否遵守框架「选择机器人」绑定, 默认关闭 (超管)',
         '',
         '【新增/删除】',
         f'· 新增关键词 <词> <回复内容>：群主/管理提交需超管审核 (本群上限 {_GROUP_LIMIT}, 每群最多 {_MAX_PENDING_PER_GROUP} 条在审); 超管直接生效',
@@ -1569,6 +1683,8 @@ async def api_state(request):
             'recall_sender_enabled': _data.get('recall_sender_enabled', False),
             'recall_bot_enabled': _data.get('recall_bot_enabled', False),
             'recall_bot_delay': _data.get('recall_bot_delay', 120),
+            'bot_binding_enabled': _data.get('bot_binding_enabled', False),
+            'bound_bots': _data.get('bound_bots', []),
             'super_admins': _data.get('super_admins', []),
             'group_enabled': _data.get('group_enabled', {}),
         },
@@ -1595,12 +1711,47 @@ async def api_config(request):
             _data['recall_bot_delay'] = max(1, int(body['recall_bot_delay']))
         except (TypeError, ValueError):
             pass
+    if 'bot_binding_enabled' in body:
+        _data['bot_binding_enabled'] = bool(body['bot_binding_enabled'])
+    if isinstance(body.get('bound_bots'), list):
+        _data['bound_bots'] = [str(a).strip() for a in body['bound_bots'] if str(a).strip()]
     if isinstance(body.get('super_admins'), list):
         _data['super_admins'] = [str(a).strip() for a in body['super_admins'] if str(a).strip()]
     if isinstance(body.get('group_enabled'), dict):
         _data['group_enabled'] = {str(k): bool(v) for k, v in body['group_enabled'].items()}
     _save()
     return _json({'success': True})
+
+
+@register_route('GET', f'{_API}/bots')
+async def api_get_bots(request):
+    """机器人列表 + 当前选择 + 生效状态 (绑定限制开关关闭时不限制)。"""
+    enabled = _data.get('bot_binding_enabled', False)
+    own = _data.get('bound_bots') or []
+    framework = _bound_bot_appids() or []
+    ab = _allowed_bot_appids() if enabled else None
+    return _json({
+        'success': True,
+        'bots': _list_framework_bots(),
+        'bound': own,
+        'framework_bound': framework,
+        'binding_enabled': enabled,
+        'effective': sorted(ab) if ab else [],
+    })
+
+
+@register_route('POST', f'{_API}/bots')
+async def api_set_bots(request):
+    """body: {"appids": [...]} 保存插件自己的机器人选择; 空列表 = 不限制。
+
+    只存在插件数据里, 不修改框架 plugin_bots, 仅在「绑定限制」开启时生效。"""
+    body = await _body(request)
+    appids = body.get('appids')
+    if not isinstance(appids, list):
+        return _json({'success': False, 'message': 'appids 必须为列表'}, status=400)
+    _data['bound_bots'] = [str(a).strip() for a in appids if str(a).strip()]
+    _save()
+    return _json({'success': True, 'bound': _data['bound_bots']})
 
 
 @register_route('POST', f'{_API}/rule')

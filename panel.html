@@ -190,6 +190,16 @@
         <div class="hint">总开关: 机器人发送回复后延迟一段时间自动撤回 (规则需同时勾选「撤回机器人」)。</div>
       </div>
       <div class="row">
+        <label>绑定限制</label>
+        <div class="switch" id="sw-bot-binding" onclick="toggleBotBinding()"><span class="knob"></span><span id="sw-bot-binding-text">关闭</span></div>
+        <div class="hint">开启后, 关键词触发与定时推送仅对下方勾选的机器人生效 (未勾选任何机器人时回退到框架「选择机器人」绑定, 都没有则不限制); 关闭时所有机器人均可触发, 勾选不生效。</div>
+      </div>
+      <div class="row" style="display:block" id="bot-bind-row">
+        <label style="display:block;margin-bottom:8px">选择机器人 (可多选)</label>
+        <div id="bot-bind-list" class="taglist"></div>
+        <div class="hint" id="bot-bind-hint"></div>
+      </div>
+      <div class="row">
         <label>撤回延迟 (秒)</label>
         <input type="number" id="cfg-recall-delay" value="120" min="1" style="max-width:160px">
         <div class="hint">机器人回复后多少秒自动撤回, 默认 120 秒 (2 分钟)。</div>
@@ -525,6 +535,9 @@ function renderCfg(){
   $('sw-recall-sender').classList.toggle('on', rs); $('sw-recall-sender-text').textContent= rs?'开启':'关闭';
   const rb=!!CONFIG.recall_bot_enabled;
   $('sw-recall-bot').classList.toggle('on', rb); $('sw-recall-bot-text').textContent= rb?'开启':'关闭';
+  const bb=!!CONFIG.bot_binding_enabled;
+  $('sw-bot-binding').classList.toggle('on', bb); $('sw-bot-binding-text').textContent= bb?'开启':'关闭';
+  renderBots();
   $('cfg-recall-delay').value = CONFIG.recall_bot_delay||120;
   const sl=$('sa-list'); sl.innerHTML='';
   (CONFIG.super_admins||[]).forEach((a,i)=>{
@@ -546,6 +559,30 @@ function toggleGlobal(){ CONFIG.global_enabled=!CONFIG.global_enabled; renderCfg
 function toggleReject(){ CONFIG.notify_reject=(CONFIG.notify_reject===false); renderCfg(); }
 function toggleRecallSender(){ CONFIG.recall_sender_enabled=!CONFIG.recall_sender_enabled; renderCfg(); }
 function toggleRecallBot(){ CONFIG.recall_bot_enabled=!CONFIG.recall_bot_enabled; renderCfg(); }
+function toggleBotBinding(){ CONFIG.bot_binding_enabled=!CONFIG.bot_binding_enabled; renderCfg(); }
+let BOTS=[];
+async function loadBots(){
+  try{ const r=await api('/bots','GET'); if(r.success){ BOTS=r.bots||[]; renderBots(); } }catch(e){}
+}
+function renderBots(){
+  const box=$('bot-bind-list'); if(!box) return;
+  const bound=CONFIG.bound_bots||[];
+  const bb=!!CONFIG.bot_binding_enabled;
+  box.innerHTML='';
+  if(!BOTS.length){ box.innerHTML='<span class="hint">未获取到机器人列表 (框架未启动?)</span>'; }
+  BOTS.forEach(b=>{
+    const sel=bound.includes(b.appid);
+    const eff=bb && (bound.length? sel : true);
+    const t=document.createElement('span'); t.className='tag'; t.style.cursor='pointer';
+    t.style.opacity=bb?'1':'0.55';
+    if(sel) t.style.borderColor='var(--accent, #4c8dff)';
+    t.innerHTML=`<input type="checkbox" ${sel?'checked':''} style="pointer-events:none"> ${esc(b.name)} <span class="mono">${esc(b.appid)}</span>${eff?' <b style="color:#2eb872">生效中</b>':''}`;
+    t.onclick=()=>{ CONFIG.bound_bots = sel ? bound.filter(a=>a!==b.appid) : bound.concat([b.appid]); renderBots(); };
+    box.appendChild(t);
+  });
+  const hint=$('bot-bind-hint');
+  if(hint) hint.textContent = bb ? (bound.length? `开关已开启: 仅勾选的 ${bound.length} 个机器人会触发关键词/定时推送。` : '开关已开启但未勾选: 回退到框架绑定, 都没有则所有机器人生效。') : '开关关闭: 勾选不生效, 所有机器人均可触发。需先开启上方「绑定限制」。';
+}
 function toggleGroup(g){ CONFIG.group_enabled[g]=!CONFIG.group_enabled[g]; renderCfg(); }
 async function toggleForbid(){
   const next=!CONFIG.forbid_group;
@@ -568,7 +605,7 @@ function rmSuperAdmin(i){ CONFIG.super_admins.splice(i,1); renderCfg(); }
 
 async function saveConfig(){
   CONFIG.recall_bot_delay = Math.max(1, parseInt($('cfg-recall-delay').value)||120);
-  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, notify_reject:CONFIG.notify_reject, recall_sender_enabled:CONFIG.recall_sender_enabled, recall_bot_enabled:CONFIG.recall_bot_enabled, recall_bot_delay:CONFIG.recall_bot_delay, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
+  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, notify_reject:CONFIG.notify_reject, recall_sender_enabled:CONFIG.recall_sender_enabled, recall_bot_enabled:CONFIG.recall_bot_enabled, recall_bot_delay:CONFIG.recall_bot_delay, bot_binding_enabled:CONFIG.bot_binding_enabled, bound_bots:CONFIG.bound_bots||[], super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
   if(r.success){ toast('已保存'); loadState(); } else toast('保存失败');
 }
 
@@ -727,6 +764,7 @@ async function runTest(){
 
 applyTheme();
 loadState();
+loadBots();
 </script>
 </body>
 </html>
