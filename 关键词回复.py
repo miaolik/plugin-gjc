@@ -730,43 +730,6 @@ def _get_sender(appid=''):
         return None
 
 
-def _allowed_bot_appids():
-    """读取框架「插件选择机器人」绑定, 返回本插件允许的 appid 集合; None 表示不限制。
-
-    框架的绑定只作用于 handler, 拦截器需自行检查。键为 插件名 或 插件名/文件名。"""
-    try:
-        from core.bot.manager import _bot_manager_ref
-        pm = getattr(_bot_manager_ref, '_plugin_manager', None) or getattr(_bot_manager_ref, 'plugin_manager', None)
-        if not pm or not hasattr(pm, 'get_plugin_bots'):
-            return None
-        pb = pm.get_plugin_bots()
-        if not pb:
-            return None
-        parts = (__name__ or '').split('.')
-        plugin = parts[1] if len(parts) >= 2 else ''
-        fname = parts[2] if len(parts) >= 3 else ''
-        keys = []
-        if plugin and fname:
-            keys.append(f'{plugin}/{fname}')
-        if plugin:
-            keys.append(plugin)
-        for key in keys:
-            bots = pb.get(key)
-            if bots is not None:
-                return frozenset(str(b) for b in bots) if bots else None
-        return None
-    except Exception as e:
-        log.warning(f'读取插件机器人绑定失败: {e}')
-        return None
-
-
-def _bot_allowed(event):
-    ab = _allowed_bot_appids()
-    if ab is None:
-        return True
-    return str(getattr(event, 'appid', '') or '') in ab
-
-
 # ==================== Cron 解析 ====================
 
 
@@ -839,8 +802,7 @@ async def _run_due_tasks(now):
         group_ids = _normalize_group_ids(rule.get('cron_group_ids', []))
         if not group_ids:
             continue
-        ab = _allowed_bot_appids()
-        sender = _get_sender(next(iter(ab)) if ab else '')
+        sender = _get_sender()
         if not sender:
             log.warning('定时推送无可用机器人 (sender 为空), 跳过')
             continue
@@ -891,8 +853,6 @@ async def autoreply_interceptor(event):
     返回 True 表示已消费事件, None 表示放行给后续 handler 处理。
     """
     if getattr(event, 'is_bot', False):
-        return None
-    if not _bot_allowed(event):
         return None
     content = getattr(event, 'content', '') or ''
     if not content.strip():
