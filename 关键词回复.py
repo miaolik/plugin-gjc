@@ -1601,45 +1601,43 @@ async def list_rules(event, match):
 @handler(r'^关键词菜单$', name='关键词菜单', desc='查看关键词插件指令说明', ignore_at_check=True)
 async def menu(event, match):
     is_super = _is_super_admin(event)
+
+    def row(*items):
+        return ' '.join(_btn(cmd, cmd, enter=enter) for cmd, enter in items)
+
     lines = [
-        '【关键词自动回复 · 使用说明】',
-        '命中关键词的群消息会自动回复 (按规则优先级)。',
+        '【关键词自动回复】点按钮直接执行; 新增/删除/通过/拒绝类点击后在输入框补参数再发送',
         '',
         '【开关】',
-        '· 关键词开启 / 关键词关闭：开关本群 (群主/管理)',
-        '· 关键词全局开启 / 关键词全局关闭：开关全局 (超管)',
-        '· 一键开启分群 / 一键关闭分群：批量开关所有分群 (超管)',
-        '· 禁止分群开启 / 禁止分群关闭：开启后各群不能自行开启/新增且全部关闭, 超管豁免 (超管)',
-        '· 绑定限制开启 / 绑定限制关闭：是否遵守框架「选择机器人」绑定, 默认关闭 (超管)',
+        row(('关键词开启', True), ('关键词关闭', True)),
+    ]
+    if is_super:
+        lines += [
+            row(('关键词全局开启', True), ('关键词全局关闭', True)),
+            row(('一键开启分群', True), ('一键关闭分群', True)),
+            row(('禁止分群开启', True), ('禁止分群关闭', True)),
+            row(('绑定限制开启', True), ('绑定限制关闭', True)),
+        ]
+    lines += [
         '',
         '【新增/删除】',
-        f'· 新增关键词 <词> <回复内容>：群主/管理提交需超管审核 (本群上限 {_GROUP_LIMIT}, 每群最多 {_MAX_PENDING_PER_GROUP} 条在审); 超管直接生效',
-        '· 新增撤回关键词 <词> <内容>：同上, 但触发后撤回发送者消息+定时撤回机器人回复',
-        '· 删除关键词 <词>：删除本群词',
-        '· 新增全局关键词 <词> <内容> / 删除全局关键词 <词>：超管',
-        '',
-        '【审核 (超管)】',
-        '· 待审核：查看待审核列表',
-        '· 通过 序号 [序号...]：通过 (可多个, 如 通过 1 2)',
-        '· 拒绝 序号 [序号...]：驳回',
-        '· 一键通过：通过所有待审核',
-        '· 一键拒绝：拒绝所有待审核',
-        '· 拒绝通知开启 / 拒绝通知关闭：是否在拒绝时通知提交群',
+        row(('新增关键词', False), ('新增撤回关键词', False), ('删除关键词', False)),
+    ]
+    if is_super:
+        lines.append(row(('新增全局关键词', False), ('删除全局关键词', False)))
+        lines += [
+            '',
+            '【审核】',
+            row(('待审核', True), ('一键通过', True), ('一键拒绝', True)),
+            row(('通过', False), ('拒绝', False)),
+            row(('拒绝通知开启', True), ('拒绝通知关闭', True)),
+        ]
+    lines += [
         '',
         '【查看】',
-        '· 关键词列表：超管看全部+本群; 群主/管理看本群',
-        '',
-        '提示：多种输出方式(图片/语音/视频/markdown/ark)与定时推送(cron)可在 Web 后台「关键词自动回复」面板配置。',
+        row(('关键词列表', True)),
     ]
-    btns = [_btn('关键词开启', '关键词开启'), _btn('新增关键词', '新增关键词', enter=False), _btn('新增撤回关键词', '新增撤回关键词', enter=False), _btn('关键词列表', '关键词列表')]
-    if is_super:
-        btns.append(_btn('待审核', '待审核'))
-        btns.append(_btn('一键通过', '一键通过'))
-        btns.append(_btn('一键拒绝', '一键拒绝'))
-        btns.append(_btn('一键关闭分群', '一键关闭分群'))
-        forbid_cmd = '禁止分群关闭' if _forbid_group() else '禁止分群开启'
-        btns.append(_btn(forbid_cmd, forbid_cmd))
-    await event.reply('\n'.join(lines) + '\n' + ' '.join(btns))
+    await event.reply('\n'.join(lines))
 
 
 # ==================== Web 后台 API ====================
