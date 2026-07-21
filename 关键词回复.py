@@ -1622,18 +1622,22 @@ async def menu(event, match):
     lines += [
         '',
         '【新增/删除】',
-        *rows(('新增关键词', False), ('新增撤回关键词', False), ('删除关键词', False)),
+        _btn('新增关键词', '新增关键词 关键词 回复内容', enter=False),
+        _btn('新增撤回关键词', '新增撤回关键词 关键词 回复内容', enter=False),
+        _btn('删除关键词', '删除关键词 关键词', enter=False),
     ]
     if is_super:
-        lines += rows(('新增全局关键词', False), ('删除全局关键词', False))
+        lines += [
+            _btn('新增全局关键词', '新增全局关键词 关键词 回复内容', enter=False),
+            _btn('删除全局关键词', '删除全局关键词 关键词', enter=False),
+        ]
         lines += [
             '',
             '【审核】',
-            *rows(
-                ('待审核', True), ('一键通过', True), ('一键拒绝', True),
-                ('通过', False), ('拒绝', False),
-                ('拒绝通知开启', True), ('拒绝通知关闭', True),
-            ),
+            *rows(('待审核', True), ('一键通过', True), ('一键拒绝', True)),
+            _btn('通过', '通过 序号', enter=False),
+            _btn('拒绝', '拒绝 序号', enter=False),
+            *rows(('拒绝通知开启', True), ('拒绝通知关闭', True)),
         ]
     lines += [
         '',
