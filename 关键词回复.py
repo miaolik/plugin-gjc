@@ -304,6 +304,7 @@ _MGMT_PREFIXES = (
     '关键词开启', '关键词关闭',
     '一键开启分群', '一键关闭分群',
     '禁止分群开启', '禁止分群关闭',
+    '绑定限制开启', '绑定限制关闭',
     '拒绝通知开启', '拒绝通知关闭',
     '新增全局关键词', '删除全局关键词',
     '新增撤回关键词', '新增关键词', '删除关键词',
@@ -1602,40 +1603,42 @@ async def list_rules(event, match):
 async def menu(event, match):
     is_super = _is_super_admin(event)
 
-    def row(*items):
-        return ' '.join(_btn(cmd, cmd, enter=enter) for cmd, enter in items)
+    def rows(*items):
+        return [_btn(cmd, cmd, enter=enter) for cmd, enter in items]
 
     lines = [
         '【关键词自动回复】点按钮直接执行; 新增/删除/通过/拒绝类点击后在输入框补参数再发送',
         '',
         '【开关】',
-        row(('关键词开启', True), ('关键词关闭', True)),
+        *rows(('关键词开启', True), ('关键词关闭', True)),
     ]
     if is_super:
-        lines += [
-            row(('关键词全局开启', True), ('关键词全局关闭', True)),
-            row(('一键开启分群', True), ('一键关闭分群', True)),
-            row(('禁止分群开启', True), ('禁止分群关闭', True)),
-            row(('绑定限制开启', True), ('绑定限制关闭', True)),
-        ]
+        lines += rows(
+            ('关键词全局开启', True), ('关键词全局关闭', True),
+            ('一键开启分群', True), ('一键关闭分群', True),
+            ('禁止分群开启', True), ('禁止分群关闭', True),
+            ('绑定限制开启', True), ('绑定限制关闭', True),
+        )
     lines += [
         '',
         '【新增/删除】',
-        row(('新增关键词', False), ('新增撤回关键词', False), ('删除关键词', False)),
+        *rows(('新增关键词', False), ('新增撤回关键词', False), ('删除关键词', False)),
     ]
     if is_super:
-        lines.append(row(('新增全局关键词', False), ('删除全局关键词', False)))
+        lines += rows(('新增全局关键词', False), ('删除全局关键词', False))
         lines += [
             '',
             '【审核】',
-            row(('待审核', True), ('一键通过', True), ('一键拒绝', True)),
-            row(('通过', False), ('拒绝', False)),
-            row(('拒绝通知开启', True), ('拒绝通知关闭', True)),
+            *rows(
+                ('待审核', True), ('一键通过', True), ('一键拒绝', True),
+                ('通过', False), ('拒绝', False),
+                ('拒绝通知开启', True), ('拒绝通知关闭', True),
+            ),
         ]
     lines += [
         '',
         '【查看】',
-        row(('关键词列表', True)),
+        *rows(('关键词列表', True)),
     ]
     await event.reply('\n'.join(lines))
 
