@@ -190,6 +190,11 @@
         <div class="hint">总开关: 机器人发送回复后延迟一段时间自动撤回 (规则需同时勾选「撤回机器人」)。</div>
       </div>
       <div class="row">
+        <label>绑定限制</label>
+        <div class="switch" id="sw-bot-binding" onclick="toggleBotBinding()"><span class="knob"></span><span id="sw-bot-binding-text">关闭</span></div>
+        <div class="hint">开启后, 关键词触发与定时推送遵守框架「选择机器人」绑定; 关闭时所有机器人均可触发。若绑定的 appid 与实际收消息的机器人不一致, 关键词会全部不触发, 请谨慎开启。</div>
+      </div>
+      <div class="row">
         <label>撤回延迟 (秒)</label>
         <input type="number" id="cfg-recall-delay" value="120" min="1" style="max-width:160px">
         <div class="hint">机器人回复后多少秒自动撤回, 默认 120 秒 (2 分钟)。</div>
@@ -525,6 +530,8 @@ function renderCfg(){
   $('sw-recall-sender').classList.toggle('on', rs); $('sw-recall-sender-text').textContent= rs?'开启':'关闭';
   const rb=!!CONFIG.recall_bot_enabled;
   $('sw-recall-bot').classList.toggle('on', rb); $('sw-recall-bot-text').textContent= rb?'开启':'关闭';
+  const bb=!!CONFIG.bot_binding_enabled;
+  $('sw-bot-binding').classList.toggle('on', bb); $('sw-bot-binding-text').textContent= bb?'开启':'关闭';
   $('cfg-recall-delay').value = CONFIG.recall_bot_delay||120;
   const sl=$('sa-list'); sl.innerHTML='';
   (CONFIG.super_admins||[]).forEach((a,i)=>{
@@ -546,6 +553,7 @@ function toggleGlobal(){ CONFIG.global_enabled=!CONFIG.global_enabled; renderCfg
 function toggleReject(){ CONFIG.notify_reject=(CONFIG.notify_reject===false); renderCfg(); }
 function toggleRecallSender(){ CONFIG.recall_sender_enabled=!CONFIG.recall_sender_enabled; renderCfg(); }
 function toggleRecallBot(){ CONFIG.recall_bot_enabled=!CONFIG.recall_bot_enabled; renderCfg(); }
+function toggleBotBinding(){ CONFIG.bot_binding_enabled=!CONFIG.bot_binding_enabled; renderCfg(); }
 function toggleGroup(g){ CONFIG.group_enabled[g]=!CONFIG.group_enabled[g]; renderCfg(); }
 async function toggleForbid(){
   const next=!CONFIG.forbid_group;
@@ -568,7 +576,7 @@ function rmSuperAdmin(i){ CONFIG.super_admins.splice(i,1); renderCfg(); }
 
 async function saveConfig(){
   CONFIG.recall_bot_delay = Math.max(1, parseInt($('cfg-recall-delay').value)||120);
-  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, notify_reject:CONFIG.notify_reject, recall_sender_enabled:CONFIG.recall_sender_enabled, recall_bot_enabled:CONFIG.recall_bot_enabled, recall_bot_delay:CONFIG.recall_bot_delay, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
+  const r=await api('/config','POST',{global_enabled:CONFIG.global_enabled, forbid_group:CONFIG.forbid_group, notify_reject:CONFIG.notify_reject, recall_sender_enabled:CONFIG.recall_sender_enabled, recall_bot_enabled:CONFIG.recall_bot_enabled, recall_bot_delay:CONFIG.recall_bot_delay, bot_binding_enabled:CONFIG.bot_binding_enabled, super_admins:CONFIG.super_admins, group_enabled:CONFIG.group_enabled});
   if(r.success){ toast('已保存'); loadState(); } else toast('保存失败');
 }
 
